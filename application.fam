@@ -1,5 +1,5 @@
 App(
-    appid="tamagometer_companion",
+    appid="tamagometer_enhanced",
     name="Tamagometer Enhanced",
     apptype=FlipperAppType.EXTERNAL,
     entry_point="tamagometer_companion",

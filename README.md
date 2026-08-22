@@ -15,7 +15,7 @@ the same command.
 
 ## Install
 
-Download `TamagometerEnhanced.fap` from the
+Download `tamagometer_enhanced.fap` from the
 [latest enhanced release](https://github.com/MintCarasique/tamagometer-enhanced/releases/latest)
 and copy it to `SD Card/apps/Tools` on the Flipper. The Desktop and Companion
 versions should come from the same release.
@@ -28,7 +28,7 @@ Install [uFBT](https://github.com/flipperdevices/flipperzero-ufbt), then run:
 ufbt
 ```
 
-The generated application is written to `dist/tamagometer_companion.fap`.
+The generated application is written to `dist/tamagometer_enhanced.fap`.
 
 ## CLI contract
 

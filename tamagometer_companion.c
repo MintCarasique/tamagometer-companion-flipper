@@ -1,274 +1,764 @@
-/**
- * Tamagometer Enhanced companion for Flipper Zero.
- *
- * Connection IR support is derived from Zach Resmer's MIT-licensed
- * tamagometer-companion-flipper. Friends LF RFID timings and packets are
- * derived from Natalie Silvanovich's published Proxmark implementation.
- */
+/** Tamagometer Enhanced standalone and desktop-compatible application. */
+
+#include "tamagometer_catalog.h"
+#include "tamagometer_cli.h"
+#include "tamagometer_item_icons.h"
+#include "tamagometer_protocol.h"
+#include "tamagometer_settings.h"
+#include "tamagometer_transfer_view.h"
 
 #include <furi.h>
-#include <api_lock.h>
-#include <cli/cli.h>
-#include <furi_hal_rfid.h>
 #include <gui/gui.h>
-#include <gui/modules/text_box.h>
-#include <gui/view_holder.h>
-#include <infrared.h>
-#include <infrared_transmit.h>
-#include <infrared_worker.h>
+#include <gui/modules/popup.h>
+#include <gui/modules/submenu.h>
+#include <gui/modules/widget.h>
+#include <gui/scene_manager.h>
+#include <gui/view_dispatcher.h>
+#include <notification/notification_messages.h>
+#include <stdio.h>
+#include <string.h>
 
-#define MATCH_TIMING(x, v, delta) (((x) < ((v) + (delta))) && ((x) > ((v) - (delta))))
-#define COMPANION_VERSION "1.2.0"
-#define FRIENDS_REPEAT_COUNT 10
+#define APP_VERSION "2.0.0-dev"
+#define MENU_LABEL_LIMIT 65U
+#define MENU_LABEL_LENGTH 40U
+
+typedef enum {
+  TamaViewMenu,
+  TamaViewWidget,
+  TamaViewTransfer,
+  TamaViewPopup,
+} TamaView;
+
+typedef enum {
+  TamaSceneWelcome,
+  TamaSceneMain,
+  TamaSceneCategories,
+  TamaSceneItems,
+  TamaSceneItemDetail,
+  TamaSceneTransfer,
+  TamaSceneResult,
+  TamaSceneSettings,
+  TamaSceneAbout,
+  TamaScenePopup,
+  TamaSceneCount,
+} TamaScene;
+
+typedef enum {
+  TamaEventWelcomeDone = 1,
+  TamaEventMainConnection = 10,
+  TamaEventMainFriends,
+  TamaEventMainRepeat,
+  TamaEventMainSettings,
+  TamaEventCategoryBase = 100,
+  TamaEventItemBase = 200,
+  TamaEventDetailFavorite = 500,
+  TamaEventDetailSend,
+  TamaEventTransferProgress,
+  TamaEventTransferFinished,
+  TamaEventResultMenu,
+  TamaEventResultRepeat,
+  TamaEventSettingsVibration,
+  TamaEventSettingsDiagnostics,
+  TamaEventSettingsGuide,
+  TamaEventSettingsAbout,
+  TamaEventPopupDone,
+} TamaEvent;
 
 typedef struct {
-    bool command_decoded;
-    bool timed_out;
-    FuriApiLock cli_lock;
-} AppState;
+  Gui *gui;
+  ViewDispatcher *view_dispatcher;
+  SceneManager *scene_manager;
+  Submenu *submenu;
+  Widget *widget;
+  Popup *popup;
+  TamagometerTransferView *transfer_view;
+  NotificationApp *notifications;
+  TamagometerCli *cli;
+  FuriMutex *radio_mutex;
+  FuriMutex *state_mutex;
+  FuriThread *transfer_thread;
+  volatile bool cancel_requested;
+  TamaSettings settings;
+  TamaMode selected_mode;
+  TamaCategory selected_category;
+  uint8_t selected_item;
+  TamaTransferStage transfer_stage;
+  TamaTransferResult transfer_result;
+  uint8_t transfer_current;
+  uint8_t transfer_total;
+  uint8_t animation_frame;
+  char selected_name[MENU_LABEL_LENGTH];
+  char menu_labels[MENU_LABEL_LIMIT][MENU_LABEL_LENGTH];
+  uint8_t menu_label_count;
+  char popup_header[24];
+  char popup_text[72];
+  char last_status[72];
+} TamagometerApp;
 
-static AppState app_state;
+static void send_event(TamagometerApp *app, uint32_t event) {
+  view_dispatcher_send_custom_event(app->view_dispatcher, event);
+}
 
-typedef struct {
-    uint32_t header_mark;
-    uint32_t header_mark_tolerance;
-    uint32_t header_space;
-    uint32_t header_space_tolerance;
-    uint32_t data_mark;
-    uint32_t data_mark_tolerance;
-    uint32_t data_0_space;
-    uint32_t data_0_space_tolerance;
-    uint32_t data_1_space;
-    uint32_t data_1_space_tolerance;
-    uint32_t ending_mark;
-} DecoderTimings;
+static void submenu_callback(void *context, uint32_t index) {
+  send_event(context, index);
+}
 
-static const DecoderTimings ir = {
-    .header_mark = 9600,
-    .header_mark_tolerance = 2000,
-    .header_space = 5000,
-    .header_space_tolerance = 1500,
-    .data_mark = 550,
-    .data_mark_tolerance = 300,
-    .data_0_space = 600,
-    .data_0_space_tolerance = 400,
-    .data_1_space = 1500,
-    .data_1_space_tolerance = 500,
-    .ending_mark = 1100,
+static void widget_callback(GuiButtonType button, InputType type,
+                            void *context) {
+  if (type != InputTypeShort)
+    return;
+  TamagometerApp *app = context;
+  uint32_t scene = scene_manager_get_current_scene(app->scene_manager);
+  if (scene == TamaSceneWelcome && button == GuiButtonTypeCenter) {
+    send_event(app, TamaEventWelcomeDone);
+  } else if (scene == TamaSceneItemDetail) {
+    if (button == GuiButtonTypeLeft)
+      send_event(app, TamaEventDetailFavorite);
+    if (button == GuiButtonTypeCenter)
+      send_event(app, TamaEventDetailSend);
+  } else if (scene == TamaSceneResult) {
+    if (button == GuiButtonTypeLeft)
+      send_event(app, TamaEventResultMenu);
+    if (button == GuiButtonTypeCenter)
+      send_event(app, TamaEventResultRepeat);
+  }
+}
+
+static void popup_callback(void *context) {
+  send_event(context, TamaEventPopupDone);
+}
+
+static bool custom_event_callback(void *context, uint32_t event) {
+  TamagometerApp *app = context;
+  return scene_manager_handle_custom_event(app->scene_manager, event);
+}
+
+static bool navigation_event_callback(void *context) {
+  return scene_manager_handle_back_event(
+      ((TamagometerApp *)context)->scene_manager);
+}
+
+static void tick_event_callback(void *context) {
+  scene_manager_handle_tick_event(((TamagometerApp *)context)->scene_manager);
+}
+
+static void transfer_cancel_callback(void *context) {
+  ((TamagometerApp *)context)->cancel_requested = true;
+}
+
+static bool transfer_is_cancelled(void *context) {
+  return ((TamagometerApp *)context)->cancel_requested;
+}
+
+static void transfer_progress_callback(TamaTransferStage stage, uint8_t current,
+                                       uint8_t total, void *context) {
+  TamagometerApp *app = context;
+  furi_mutex_acquire(app->state_mutex, FuriWaitForever);
+  app->transfer_stage = stage;
+  app->transfer_current = current;
+  app->transfer_total = total;
+  furi_mutex_release(app->state_mutex);
+  send_event(app, TamaEventTransferProgress);
+}
+
+static int32_t transfer_worker(void *context) {
+  TamagometerApp *app = context;
+  furi_mutex_acquire(app->radio_mutex, FuriWaitForever);
+  TamaTransferResult result =
+      app->cancel_requested ? TamaTransferResultCancelled
+      : app->selected_mode == TamaModeFriends
+          ? tama_protocol_friends_transfer(app->selected_item,
+                                           transfer_is_cancelled,
+                                           transfer_progress_callback, app)
+          : tama_protocol_connection_transfer(app->selected_item,
+                                              transfer_is_cancelled,
+                                              transfer_progress_callback, app);
+  furi_mutex_release(app->radio_mutex);
+  furi_mutex_acquire(app->state_mutex, FuriWaitForever);
+  app->transfer_result = result;
+  furi_mutex_release(app->state_mutex);
+  send_event(app, TamaEventTransferFinished);
+  return 0;
+}
+
+static void set_selected_item(TamagometerApp *app, TamaMode mode,
+                              uint8_t item_id) {
+  app->selected_mode = mode;
+  app->selected_item = item_id;
+  char generated[MENU_LABEL_LENGTH];
+  const char *name =
+      tama_catalog_item_name(mode, item_id, generated, sizeof(generated));
+  strlcpy(app->selected_name, name, sizeof(app->selected_name));
+}
+
+static void show_popup(TamagometerApp *app, const char *header,
+                       const char *text) {
+  strlcpy(app->popup_header, header, sizeof(app->popup_header));
+  strlcpy(app->popup_text, text, sizeof(app->popup_text));
+  scene_manager_next_scene(app->scene_manager, TamaScenePopup);
+}
+
+static void fill_main_menu(TamagometerApp *app) {
+  submenu_reset(app->submenu);
+  submenu_set_header(app->submenu, "Tamagometer Enhanced");
+  submenu_add_item(app->submenu, "Connection - IR", TamaEventMainConnection,
+                   submenu_callback, app);
+  submenu_add_item(app->submenu, "Friends - LF RFID", TamaEventMainFriends,
+                   submenu_callback, app);
+  if (app->settings.last_valid) {
+    submenu_add_item(app->submenu, "Repeat last transfer", TamaEventMainRepeat,
+                     submenu_callback, app);
+  }
+  submenu_add_item(app->submenu, "Settings & diagnostics",
+                   TamaEventMainSettings, submenu_callback, app);
+}
+
+static void fill_settings_menu(TamagometerApp *app) {
+  submenu_reset(app->submenu);
+  submenu_set_header(app->submenu, "Settings");
+  snprintf(app->menu_labels[0], MENU_LABEL_LENGTH, "Vibration: %s",
+           app->settings.vibration ? "On" : "Off");
+  submenu_add_item(app->submenu, app->menu_labels[0],
+                   TamaEventSettingsVibration, submenu_callback, app);
+  submenu_add_item(app->submenu, "Export diagnostic report",
+                   TamaEventSettingsDiagnostics, submenu_callback, app);
+  submenu_add_item(app->submenu, "Placement guide", TamaEventSettingsGuide,
+                   submenu_callback, app);
+  submenu_add_item(app->submenu, "About", TamaEventSettingsAbout,
+                   submenu_callback, app);
+}
+
+static bool item_matches_selection(TamagometerApp *app, TamaMode mode,
+                                   uint8_t item_id) {
+  if (app->selected_category == TamaCategoryFavorites) {
+    return tama_settings_is_favorite(&app->settings, mode, item_id);
+  }
+  if (app->selected_category == TamaCategoryRecent) {
+    return tama_settings_is_recent(&app->settings, mode, item_id);
+  }
+  return tama_catalog_category_matches(mode, app->selected_category, item_id);
+}
+
+static void add_item_menu_entry(TamagometerApp *app, uint8_t item_id) {
+  if (app->menu_label_count >= MENU_LABEL_LIMIT)
+    return;
+  char generated[MENU_LABEL_LENGTH];
+  const char *name = tama_catalog_item_name(app->selected_mode, item_id,
+                                            generated, sizeof(generated));
+  strlcpy(app->menu_labels[app->menu_label_count], name, MENU_LABEL_LENGTH);
+  submenu_add_item(app->submenu, app->menu_labels[app->menu_label_count],
+                   TamaEventItemBase + item_id, submenu_callback, app);
+  app->menu_label_count++;
+}
+
+static void fill_items_menu(TamagometerApp *app) {
+  submenu_reset(app->submenu);
+  submenu_set_header(app->submenu,
+                     tama_catalog_category_name(app->selected_category));
+  app->menu_label_count = 0;
+  if (app->selected_category == TamaCategoryRecent) {
+    for (uint8_t i = 0; i < app->settings.recent_count; i++) {
+      TamaItemRef recent = app->settings.recent[i];
+      if (recent.mode == app->selected_mode)
+        add_item_menu_entry(app, recent.item_id);
+    }
+  } else {
+    size_t count = tama_catalog_item_count(app->selected_mode);
+    for (size_t index = 0; index < count; index++) {
+      uint8_t item_id = tama_catalog_item_id(app->selected_mode, index);
+      if (item_matches_selection(app, app->selected_mode, item_id))
+        add_item_menu_entry(app, item_id);
+    }
+  }
+  if (app->menu_label_count == 0) {
+    strlcpy(app->menu_labels[0], "No items yet", MENU_LABEL_LENGTH);
+    submenu_add_item(app->submenu, app->menu_labels[0], UINT32_MAX,
+                     submenu_callback, app);
+  }
+}
+
+static void fill_item_detail(TamagometerApp *app) {
+  widget_reset(app->widget);
+  char details[64];
+  snprintf(details, sizeof(details), "%s\nID: %s%u\n%s",
+           app->selected_mode == TamaModeFriends ? "Friends - LF RFID"
+                                                 : "Connection - IR",
+           app->selected_mode == TamaModeFriends ? "0x" : "",
+           (unsigned int)app->selected_item,
+           tama_catalog_category_name(tama_catalog_item_category(
+               app->selected_mode, app->selected_item)));
+  if (app->selected_mode == TamaModeFriends) {
+    snprintf(details, sizeof(details), "Friends - LF RFID\nID: 0x%02X\n%s",
+             app->selected_item,
+             tama_catalog_category_name(tama_catalog_item_category(
+                 app->selected_mode, app->selected_item)));
+  }
+  widget_add_string_element(app->widget, 64, 3, AlignCenter, AlignTop,
+                            FontPrimary, app->selected_name);
+  const Icon *icon = app->selected_mode == TamaModeConnection
+                         ? tamagometer_item_icon(app->selected_item)
+                         : NULL;
+  if (icon) {
+    widget_add_icon_element(app->widget, 4, 17, icon);
+    widget_add_text_box_element(app->widget, 38, 17, 86, 32, AlignCenter,
+                                AlignTop, details, false);
+  } else {
+    widget_add_text_box_element(app->widget, 4, 17, 120, 32, AlignCenter,
+                                AlignTop, details, false);
+  }
+  widget_add_button_element(app->widget, GuiButtonTypeLeft,
+                            tama_settings_is_favorite(&app->settings,
+                                                      app->selected_mode,
+                                                      app->selected_item)
+                                ? "Unfavorite"
+                                : "Favorite",
+                            widget_callback, app);
+  widget_add_button_element(app->widget, GuiButtonTypeCenter, "Send",
+                            widget_callback, app);
+}
+
+static void start_transfer(TamagometerApp *app) {
+  if (app->transfer_thread)
+    return;
+  app->cancel_requested = false;
+  app->transfer_stage = TamaTransferStagePreparing;
+  app->transfer_current = 0;
+  app->transfer_total = app->selected_mode == TamaModeFriends ? 10 : 100;
+  app->animation_frame = 0;
+  app->transfer_thread =
+      furi_thread_alloc_ex("TamaTransfer", 3072, transfer_worker, app);
+  furi_thread_start(app->transfer_thread);
+}
+
+static void finish_transfer_thread(TamagometerApp *app) {
+  if (app->transfer_thread) {
+    furi_thread_join(app->transfer_thread);
+    furi_thread_free(app->transfer_thread);
+    app->transfer_thread = NULL;
+  }
+}
+
+static void update_transfer_view(TamagometerApp *app) {
+  furi_mutex_acquire(app->state_mutex, FuriWaitForever);
+  TamaTransferStage stage = app->transfer_stage;
+  uint8_t current = app->transfer_current;
+  uint8_t total = app->transfer_total;
+  furi_mutex_release(app->state_mutex);
+  tamagometer_transfer_view_update(app->transfer_view, app->selected_mode,
+                                   app->selected_name, stage, current, total,
+                                   app->animation_frame, true);
+}
+
+static void on_enter_welcome(void *context) {
+  TamagometerApp *app = context;
+  widget_reset(app->widget);
+  widget_add_string_element(app->widget, 64, 3, AlignCenter, AlignTop,
+                            FontPrimary, "Tamagometer Enhanced");
+  widget_add_text_box_element(app->widget, 5, 16, 118, 34, AlignCenter,
+                              AlignTop,
+                              "Standalone gifts\nConnection: align IR "
+                              "ports\nFriends: back-to-back on LF",
+                              false);
+  widget_add_button_element(app->widget, GuiButtonTypeCenter, "Start",
+                            widget_callback, app);
+  view_dispatcher_switch_to_view(app->view_dispatcher, TamaViewWidget);
+}
+
+static bool on_event_welcome(void *context, SceneManagerEvent event) {
+  TamagometerApp *app = context;
+  if (event.type == SceneManagerEventTypeBack &&
+      !scene_manager_has_previous_scene(app->scene_manager,
+                                        TamaSceneSettings)) {
+    scene_manager_stop(app->scene_manager);
+    view_dispatcher_stop(app->view_dispatcher);
+    return true;
+  }
+  if (event.type == SceneManagerEventTypeCustom &&
+      event.event == TamaEventWelcomeDone) {
+    app->settings.onboarding_complete = true;
+    tama_settings_save(&app->settings);
+    if (!scene_manager_search_and_switch_to_previous_scene(app->scene_manager,
+                                                           TamaSceneSettings))
+      scene_manager_next_scene(app->scene_manager, TamaSceneMain);
+    return true;
+  }
+  return false;
+}
+
+static void on_exit_widget(void *context) {
+  widget_reset(((TamagometerApp *)context)->widget);
+}
+static void on_exit_menu(void *context) {
+  submenu_reset(((TamagometerApp *)context)->submenu);
+}
+
+static void on_enter_main(void *context) {
+  TamagometerApp *app = context;
+  fill_main_menu(app);
+  view_dispatcher_switch_to_view(app->view_dispatcher, TamaViewMenu);
+}
+
+static bool on_event_main(void *context, SceneManagerEvent event) {
+  TamagometerApp *app = context;
+  if (event.type == SceneManagerEventTypeBack) {
+    scene_manager_stop(app->scene_manager);
+    view_dispatcher_stop(app->view_dispatcher);
+    return true;
+  }
+  if (event.type != SceneManagerEventTypeCustom)
+    return false;
+  if (event.event == TamaEventMainConnection ||
+      event.event == TamaEventMainFriends) {
+    app->selected_mode = event.event == TamaEventMainFriends
+                             ? TamaModeFriends
+                             : TamaModeConnection;
+    scene_manager_next_scene(app->scene_manager, TamaSceneCategories);
+    return true;
+  }
+  if (event.event == TamaEventMainRepeat && app->settings.last_valid) {
+    set_selected_item(app, (TamaMode)app->settings.last.mode,
+                      app->settings.last.item_id);
+    scene_manager_next_scene(app->scene_manager, TamaSceneTransfer);
+    return true;
+  }
+  if (event.event == TamaEventMainSettings) {
+    scene_manager_next_scene(app->scene_manager, TamaSceneSettings);
+    return true;
+  }
+  return false;
+}
+
+static void on_enter_categories(void *context) {
+  TamagometerApp *app = context;
+  submenu_reset(app->submenu);
+  submenu_set_header(app->submenu, tama_catalog_mode_name(app->selected_mode));
+  size_t count;
+  const TamaCategory *categories =
+      tama_catalog_categories(app->selected_mode, &count);
+  for (size_t index = 0; index < count; index++) {
+    submenu_add_item(
+        app->submenu, tama_catalog_category_name(categories[index]),
+        TamaEventCategoryBase + categories[index], submenu_callback, app);
+  }
+  view_dispatcher_switch_to_view(app->view_dispatcher, TamaViewMenu);
+}
+
+static bool on_event_categories(void *context, SceneManagerEvent event) {
+  TamagometerApp *app = context;
+  if (event.type == SceneManagerEventTypeCustom &&
+      event.event >= TamaEventCategoryBase && event.event < TamaEventItemBase) {
+    app->selected_category =
+        (TamaCategory)(event.event - TamaEventCategoryBase);
+    scene_manager_next_scene(app->scene_manager, TamaSceneItems);
+    return true;
+  }
+  return false;
+}
+
+static void on_enter_items(void *context) {
+  TamagometerApp *app = context;
+  fill_items_menu(app);
+  view_dispatcher_switch_to_view(app->view_dispatcher, TamaViewMenu);
+}
+
+static bool on_event_items(void *context, SceneManagerEvent event) {
+  TamagometerApp *app = context;
+  if (event.type == SceneManagerEventTypeCustom &&
+      event.event >= TamaEventItemBase &&
+      event.event < TamaEventItemBase + 256U) {
+    set_selected_item(app, app->selected_mode,
+                      (uint8_t)(event.event - TamaEventItemBase));
+    scene_manager_next_scene(app->scene_manager, TamaSceneItemDetail);
+    return true;
+  }
+  return false;
+}
+
+static void on_enter_item_detail(void *context) {
+  TamagometerApp *app = context;
+  fill_item_detail(app);
+  view_dispatcher_switch_to_view(app->view_dispatcher, TamaViewWidget);
+}
+
+static bool on_event_item_detail(void *context, SceneManagerEvent event) {
+  TamagometerApp *app = context;
+  if (event.type != SceneManagerEventTypeCustom)
+    return false;
+  if (event.event == TamaEventDetailFavorite) {
+    tama_settings_toggle_favorite(&app->settings, app->selected_mode,
+                                  app->selected_item);
+    tama_settings_save(&app->settings);
+    fill_item_detail(app);
+    return true;
+  }
+  if (event.event == TamaEventDetailSend) {
+    scene_manager_next_scene(app->scene_manager, TamaSceneTransfer);
+    return true;
+  }
+  return false;
+}
+
+static void on_enter_transfer(void *context) {
+  TamagometerApp *app = context;
+  update_transfer_view(app);
+  view_dispatcher_switch_to_view(app->view_dispatcher, TamaViewTransfer);
+  start_transfer(app);
+}
+
+static bool on_event_transfer(void *context, SceneManagerEvent event) {
+  TamagometerApp *app = context;
+  if (event.type == SceneManagerEventTypeTick) {
+    app->animation_frame++;
+    update_transfer_view(app);
+    return true;
+  }
+  if (event.type != SceneManagerEventTypeCustom)
+    return false;
+  if (event.event == TamaEventTransferProgress) {
+    update_transfer_view(app);
+    return true;
+  }
+  if (event.event == TamaEventTransferFinished) {
+    finish_transfer_thread(app);
+    strlcpy(app->last_status, tama_protocol_result_text(app->transfer_result),
+            sizeof(app->last_status));
+    if (app->transfer_result == TamaTransferResultSuccess) {
+      tama_settings_record_transfer(&app->settings, app->selected_mode,
+                                    app->selected_item);
+      tama_settings_save(&app->settings);
+      if (app->settings.vibration)
+        notification_message(app->notifications, &sequence_single_vibro);
+    } else if (app->transfer_result != TamaTransferResultCancelled &&
+               app->settings.vibration) {
+      notification_message(app->notifications, &sequence_double_vibro);
+    }
+    scene_manager_next_scene(app->scene_manager, TamaSceneResult);
+    return true;
+  }
+  return false;
+}
+
+static void on_exit_transfer(void *context) {
+  TamagometerApp *app = context;
+  tamagometer_transfer_view_update(
+      app->transfer_view, app->selected_mode, app->selected_name,
+      TamaTransferStagePreparing, 0, 100, 0, false);
+}
+
+static void on_enter_result(void *context) {
+  TamagometerApp *app = context;
+  widget_reset(app->widget);
+  bool success = app->transfer_result == TamaTransferResultSuccess;
+  widget_add_string_element(app->widget, 64, 4, AlignCenter, AlignTop,
+                            FontPrimary,
+                            success ? "Transfer complete" : "Transfer stopped");
+  char text[128];
+  snprintf(text, sizeof(text), "%s\n%s", app->selected_name, app->last_status);
+  widget_add_text_box_element(app->widget, 5, 20, 118, 28, AlignCenter,
+                              AlignTop, text, false);
+  widget_add_button_element(app->widget, GuiButtonTypeLeft, "Menu",
+                            widget_callback, app);
+  widget_add_button_element(app->widget, GuiButtonTypeCenter, "Repeat",
+                            widget_callback, app);
+  view_dispatcher_switch_to_view(app->view_dispatcher, TamaViewWidget);
+}
+
+static bool on_event_result(void *context, SceneManagerEvent event) {
+  TamagometerApp *app = context;
+  if (event.type == SceneManagerEventTypeBack ||
+      (event.type == SceneManagerEventTypeCustom &&
+       event.event == TamaEventResultMenu)) {
+    if (!scene_manager_search_and_switch_to_another_scene(app->scene_manager,
+                                                          TamaSceneMain))
+      scene_manager_next_scene(app->scene_manager, TamaSceneMain);
+    return true;
+  }
+  if (event.type != SceneManagerEventTypeCustom)
+    return false;
+  if (event.event == TamaEventResultRepeat) {
+    scene_manager_next_scene(app->scene_manager, TamaSceneTransfer);
+    return true;
+  }
+  return false;
+}
+
+static void on_enter_settings(void *context) {
+  TamagometerApp *app = context;
+  fill_settings_menu(app);
+  view_dispatcher_switch_to_view(app->view_dispatcher, TamaViewMenu);
+}
+
+static bool on_event_settings(void *context, SceneManagerEvent event) {
+  TamagometerApp *app = context;
+  if (event.type != SceneManagerEventTypeCustom)
+    return false;
+  if (event.event == TamaEventSettingsVibration) {
+    app->settings.vibration = !app->settings.vibration;
+    tama_settings_save(&app->settings);
+    if (app->settings.vibration)
+      notification_message(app->notifications, &sequence_single_vibro);
+    fill_settings_menu(app);
+    return true;
+  }
+  if (event.event == TamaEventSettingsDiagnostics) {
+    bool saved = tama_settings_export_diagnostics(&app->settings, APP_VERSION,
+                                                  app->last_status);
+    show_popup(app, saved ? "Report exported" : "Export failed",
+               saved ? "Saved as diagnostics.txt in the app data folder"
+                     : "Check that the SD card is available");
+    return true;
+  }
+  if (event.event == TamaEventSettingsGuide) {
+    scene_manager_next_scene(app->scene_manager, TamaSceneWelcome);
+    return true;
+  }
+  if (event.event == TamaEventSettingsAbout) {
+    scene_manager_next_scene(app->scene_manager, TamaSceneAbout);
+    return true;
+  }
+  return false;
+}
+
+static void on_enter_about(void *context) {
+  TamagometerApp *app = context;
+  widget_reset(app->widget);
+  widget_add_text_scroll_element(
+      app->widget, 4, 2, 120, 60,
+      "\e#Tamagometer Enhanced 2.0\nStandalone + Desktop CLI.\n\nEnhanced fork "
+      "of the MIT-licensed Tamagometer project. Connection IR support derives "
+      "from Zach Resmer's original companion. Friends research by Natalie "
+      "Silvanovich and MrBlinky.");
+  view_dispatcher_switch_to_view(app->view_dispatcher, TamaViewWidget);
+}
+
+static bool on_event_none(void *context, SceneManagerEvent event) {
+  UNUSED(context);
+  UNUSED(event);
+  return false;
+}
+
+static void on_enter_popup(void *context) {
+  TamagometerApp *app = context;
+  popup_reset(app->popup);
+  popup_set_header(app->popup, app->popup_header, 64, 10, AlignCenter,
+                   AlignTop);
+  popup_set_text(app->popup, app->popup_text, 64, 30, AlignCenter, AlignCenter);
+  popup_set_context(app->popup, app);
+  popup_set_callback(app->popup, popup_callback);
+  popup_set_timeout(app->popup, 2200);
+  popup_enable_timeout(app->popup);
+  view_dispatcher_switch_to_view(app->view_dispatcher, TamaViewPopup);
+}
+
+static bool on_event_popup(void *context, SceneManagerEvent event) {
+  TamagometerApp *app = context;
+  if (event.type == SceneManagerEventTypeCustom &&
+      event.event == TamaEventPopupDone) {
+    scene_manager_previous_scene(app->scene_manager);
+    return true;
+  }
+  return false;
+}
+
+static void on_exit_popup(void *context) {
+  popup_reset(((TamagometerApp *)context)->popup);
+}
+
+static const AppSceneOnEnterCallback on_enter_handlers[] = {
+    on_enter_welcome, on_enter_main,        on_enter_categories,
+    on_enter_items,   on_enter_item_detail, on_enter_transfer,
+    on_enter_result,  on_enter_settings,    on_enter_about,
+    on_enter_popup,
+};
+static const AppSceneOnEventCallback on_event_handlers[] = {
+    on_event_welcome, on_event_main,        on_event_categories,
+    on_event_items,   on_event_item_detail, on_event_transfer,
+    on_event_result,  on_event_settings,    on_event_none,
+    on_event_popup,
+};
+static const AppSceneOnExitCallback on_exit_handlers[] = {
+    on_exit_widget, on_exit_menu,     on_exit_menu,   on_exit_menu,
+    on_exit_widget, on_exit_transfer, on_exit_widget, on_exit_menu,
+    on_exit_widget, on_exit_popup,
+};
+static const SceneManagerHandlers scene_handlers = {
+    .on_enter_handlers = on_enter_handlers,
+    .on_event_handlers = on_event_handlers,
+    .on_exit_handlers = on_exit_handlers,
+    .scene_num = TamaSceneCount,
 };
 
-static void back_callback(void* context) {
-    api_lock_unlock((FuriApiLock)context);
-}
-static bool decode_ir(InfraredWorkerSignal* signal, unsigned char* bits) {
-    const uint32_t* timings;
-    size_t count;
-    infrared_worker_get_raw_signal(signal, &timings, &count);
-    if(count < 323) return false;
-    if(!MATCH_TIMING(timings[0], ir.header_mark, ir.header_mark_tolerance) ||
-       !MATCH_TIMING(timings[1], ir.header_space, ir.header_space_tolerance)) {
-        return false;
-    }
-
-    size_t timing = 2;
-    for(size_t bit = 0; bit < 160; bit++, timing += 2) {
-        if(!MATCH_TIMING(timings[timing], ir.data_mark, ir.data_mark_tolerance)) return false;
-        if(MATCH_TIMING(timings[timing + 1], ir.data_0_space, ir.data_0_space_tolerance)) {
-            bits[bit] = '0';
-        } else if(MATCH_TIMING(
-                      timings[timing + 1], ir.data_1_space, ir.data_1_space_tolerance)) {
-            bits[bit] = '1';
-        } else {
-            return false;
-        }
-    }
-    return true;
-}
-
-static void signal_received(void* pipe, InfraredWorkerSignal* signal) {
-    unsigned char bits[160];
-    if(decode_ir(signal, bits)) {
-        pipe_send(pipe, (unsigned char*)"[PICO]", 6);
-        pipe_send(pipe, bits, 160);
-        pipe_send(pipe, (unsigned char*)"[END]", 5);
-        app_state.command_decoded = true;
-    }
-}
-
-static void listen_timeout(void* context) {
-    UNUSED(context);
-    app_state.timed_out = true;
-}
-
-static void listen_ir(PipeSide* pipe) {
-    FuriTimer* timer = furi_timer_alloc(listen_timeout, FuriTimerTypeOnce, NULL);
-    furi_timer_start(timer, furi_ms_to_ticks(1000));
-    InfraredWorker* worker = infrared_worker_alloc();
-    infrared_worker_rx_set_received_signal_callback(worker, signal_received, pipe);
-    infrared_worker_rx_start(worker);
-    furi_hal_infrared_async_rx_set_timeout(ir.header_space + ir.header_space_tolerance);
-
-    while(!app_state.command_decoded && !app_state.timed_out &&
-          !cli_is_pipe_broken_or_is_etx_next_char(pipe)) {
-        furi_delay_ms(1);
-    }
-    if(app_state.timed_out) {
-        static const unsigned char timeout_message[] = "[PICO]timed out[END]";
-        pipe_send(pipe, timeout_message, sizeof(timeout_message) - 1);
-    }
-    infrared_worker_rx_stop(worker);
-    infrared_worker_free(worker);
-    furi_timer_stop(timer);
-    furi_timer_free(timer);
+static TamagometerApp *app_alloc(void) {
+  TamagometerApp *app = malloc(sizeof(TamagometerApp));
+  memset(app, 0, sizeof(*app));
+  app->selected_mode = TamaModeConnection;
+  app->selected_category = TamaCategoryFood;
+  strlcpy(app->last_status, "No transfers in this session",
+          sizeof(app->last_status));
+  tama_settings_load(&app->settings);
+  app->radio_mutex = furi_mutex_alloc(FuriMutexTypeNormal);
+  app->state_mutex = furi_mutex_alloc(FuriMutexTypeNormal);
+  app->gui = furi_record_open(RECORD_GUI);
+  app->notifications = furi_record_open(RECORD_NOTIFICATION);
+  app->view_dispatcher = view_dispatcher_alloc();
+  app->scene_manager = scene_manager_alloc(&scene_handlers, app);
+  app->submenu = submenu_alloc();
+  app->widget = widget_alloc();
+  app->popup = popup_alloc();
+  app->transfer_view = tamagometer_transfer_view_alloc();
+  view_dispatcher_set_event_callback_context(app->view_dispatcher, app);
+  view_dispatcher_set_custom_event_callback(app->view_dispatcher,
+                                            custom_event_callback);
+  view_dispatcher_set_navigation_event_callback(app->view_dispatcher,
+                                                navigation_event_callback);
+  view_dispatcher_set_tick_event_callback(app->view_dispatcher,
+                                          tick_event_callback, 250);
+  view_dispatcher_add_view(app->view_dispatcher, TamaViewMenu,
+                           submenu_get_view(app->submenu));
+  view_dispatcher_add_view(app->view_dispatcher, TamaViewWidget,
+                           widget_get_view(app->widget));
+  view_dispatcher_add_view(
+      app->view_dispatcher, TamaViewTransfer,
+      tamagometer_transfer_view_get_view(app->transfer_view));
+  view_dispatcher_add_view(app->view_dispatcher, TamaViewPopup,
+                           popup_get_view(app->popup));
+  tamagometer_transfer_view_set_cancel_callback(app->transfer_view,
+                                                transfer_cancel_callback, app);
+  view_dispatcher_attach_to_gui(app->view_dispatcher, app->gui,
+                                ViewDispatcherTypeFullscreen);
+  app->cli = tamagometer_cli_alloc(app->radio_mutex);
+  tamagometer_cli_register(app->cli);
+  return app;
 }
 
-static bool ir_bits_to_timings(const char* bitstring, uint32_t* timings) {
-    if(strlen(bitstring) != 160) return false;
-    timings[0] = ir.header_mark;
-    timings[1] = ir.header_space;
-    size_t output = 2;
-    for(size_t bit = 0; bit < 160; bit++) {
-        timings[output++] = ir.data_mark;
-        if(bitstring[bit] == '0') {
-            timings[output++] = ir.data_0_space;
-        } else if(bitstring[bit] == '1') {
-            timings[output++] = ir.data_1_space;
-        } else {
-            return false;
-        }
-    }
-    timings[output] = ir.ending_mark;
-    return true;
+static void app_free(TamagometerApp *app) {
+  app->cancel_requested = true;
+  finish_transfer_thread(app);
+  tamagometer_cli_unregister_and_free(app->cli);
+  view_dispatcher_remove_view(app->view_dispatcher, TamaViewPopup);
+  view_dispatcher_remove_view(app->view_dispatcher, TamaViewTransfer);
+  view_dispatcher_remove_view(app->view_dispatcher, TamaViewWidget);
+  view_dispatcher_remove_view(app->view_dispatcher, TamaViewMenu);
+  popup_free(app->popup);
+  tamagometer_transfer_view_free(app->transfer_view);
+  widget_free(app->widget);
+  submenu_free(app->submenu);
+  scene_manager_free(app->scene_manager);
+  view_dispatcher_free(app->view_dispatcher);
+  furi_record_close(RECORD_NOTIFICATION);
+  furi_record_close(RECORD_GUI);
+  furi_mutex_free(app->state_mutex);
+  furi_mutex_free(app->radio_mutex);
+  free(app);
 }
 
-static void send_ir(const char* bitstring) {
-    uint32_t timings[323];
-    if(ir_bits_to_timings(bitstring, timings)) infrared_send_raw(timings, 323, true);
-}
-
-static void friends_send_byte(uint8_t value) {
-    /* Field-on/off timings from the published working Proxmark transmitter. */
-    furi_hal_rfid_tim_read_continue();
-    furi_delay_us(540);
-    furi_hal_rfid_tim_read_pause();
-    for(int8_t bit = 7; bit >= 0; bit--) {
-        furi_hal_rfid_tim_read_pause();
-        furi_delay_us((value & (1U << bit)) ? 650 : 270);
-        furi_hal_rfid_tim_read_continue();
-        furi_delay_us(150);
-    }
-    furi_hal_rfid_tim_read_pause();
-    furi_delay_us(210);
-}
-
-static void friends_send_packet(const uint8_t* packet, size_t length) {
-    for(size_t i = 0; i < length; i++) friends_send_byte(packet[i]);
-}
-
-static bool friends_broadcast(PipeSide* pipe, uint8_t outcome) {
-    static const uint8_t connect_ack[] = {
-        0xF0, 0x01, 0x0F, 0x01, 0x01, 0x0F, 0x0B, 0x00, 0x06, 0x80,
-        0x02, 0x08, 0x01, 0x08, 0x1A, 0x1A, 0x1A, 0x1A, 0x2D,
-    };
-    uint8_t reward[] = {0xF0, 0x07, 0x05, 0x01, 0x07, 0x0F, 0x0B, outcome, 0x00};
-    reward[8] = (uint8_t)(0x2E + outcome);
-
-    furi_hal_rfid_tim_read_start(134800.0f, 0.5f);
-    furi_hal_rfid_pin_pull_release();
-    bool completed = true;
-    for(uint8_t repeat = 0; repeat < FRIENDS_REPEAT_COUNT; repeat++) {
-        if(cli_is_pipe_broken_or_is_etx_next_char(pipe)) {
-            completed = false;
-            break;
-        }
-        friends_send_packet(connect_ack, sizeof(connect_ack));
-        if(cli_is_pipe_broken_or_is_etx_next_char(pipe)) {
-            completed = false;
-            break;
-        }
-        furi_delay_ms(100);
-        friends_send_packet(reward, sizeof(reward));
-        char progress[48];
-        snprintf(
-            progress,
-            sizeof(progress),
-            "[TAMAFRIENDS]progress=%u/%u[END]",
-            (unsigned int)(repeat + 1),
-            (unsigned int)FRIENDS_REPEAT_COUNT);
-        pipe_send(pipe, (unsigned char*)progress, strlen(progress));
-        if(repeat + 1 != FRIENDS_REPEAT_COUNT) furi_delay_ms(1000);
-    }
-    furi_hal_rfid_tim_read_stop();
-    furi_hal_rfid_pins_reset();
-    return completed;
-}
-
-static void cli_command(PipeSide* pipe, FuriString* args, void* context) {
-    UNUSED(context);
-    api_lock_relock(app_state.cli_lock);
-    app_state.command_decoded = false;
-    app_state.timed_out = false;
-
-    const char* value = furi_string_get_cstr(args);
-    char bitstring[161];
-    unsigned long outcome;
-    if(strcmp(value, "info") == 0) {
-        static const unsigned char info_message[] =
-            "[TAMAGOMETER]version=" COMPANION_VERSION
-            ";protocol=1;capabilities=connection_ir,friends_lf,friends_progress[END]";
-        pipe_send(pipe, info_message, sizeof(info_message) - 1);
-    } else if(sscanf(value, "send%160s", bitstring) == 1) {
-        send_ir(bitstring);
-    } else if(strcmp(value, "listen") == 0) {
-        listen_ir(pipe);
-    } else if(sscanf(value, "friends%lu", &outcome) == 1 && outcome <= 255) {
-        if(friends_broadcast(pipe, (uint8_t)outcome)) {
-            static const unsigned char ok_message[] = "[TAMAFRIENDS]ok[END]";
-            pipe_send(pipe, ok_message, sizeof(ok_message) - 1);
-        } else {
-            static const unsigned char cancelled_message[] = "[TAMAFRIENDS]cancelled[END]";
-            pipe_send(pipe, cancelled_message, sizeof(cancelled_message) - 1);
-        }
-    } else {
-        printf("Invalid argument(s). Use info, listen, send<bits>, or friends<0-255>.\r\n");
-    }
-    api_lock_unlock(app_state.cli_lock);
-}
-
-int32_t tamagometer_companion(void* arg) {
-    UNUSED(arg);
-    app_state.cli_lock = api_lock_alloc_locked();
-    api_lock_unlock(app_state.cli_lock);
-
-    CliRegistry* cli = furi_record_open(RECORD_CLI);
-    cli_registry_add_command(cli, "tamagometer", CliCommandFlagParallelSafe, cli_command, NULL);
-    furi_record_close(RECORD_CLI);
-
-    Gui* gui = furi_record_open(RECORD_GUI);
-    TextBox* text_box = text_box_alloc();
-    text_box_set_text(
-        text_box,
-        "Tamagometer Enhanced\n\n"
-        "Companion " COMPANION_VERSION "\n"
-        "Connection: IR\n"
-        "Friends: LF RFID\n\n"
-        "Connect USB and open\n"
-        "Tamagometer Desktop.\n\n"
-        "Press Back to exit.");
-    ViewHolder* holder = view_holder_alloc();
-    view_holder_attach_to_gui(holder, gui);
-    view_holder_set_view(holder, text_box_get_view(text_box));
-    FuriApiLock exit_lock = api_lock_alloc_locked();
-    view_holder_set_back_callback(holder, back_callback, exit_lock);
-    api_lock_wait_unlock_and_free(exit_lock);
-
-    cli = furi_record_open(RECORD_CLI);
-    cli_registry_delete_command(cli, "tamagometer");
-    furi_record_close(RECORD_CLI);
-    api_lock_wait_unlock_and_free(app_state.cli_lock);
-    view_holder_set_view(holder, NULL);
-    view_holder_free(holder);
-    text_box_free(text_box);
-    furi_record_close(RECORD_GUI);
-    return 0;
+int32_t tamagometer_companion(void *arg) {
+  UNUSED(arg);
+  TamagometerApp *app = app_alloc();
+  scene_manager_next_scene(app->scene_manager, app->settings.onboarding_complete
+                                                   ? TamaSceneMain
+                                                   : TamaSceneWelcome);
+  view_dispatcher_run(app->view_dispatcher);
+  app_free(app);
+  return 0;
 }

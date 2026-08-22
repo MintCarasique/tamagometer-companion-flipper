@@ -1,6 +1,7 @@
-# Tamagometer Enhanced Companion
+# Tamagometer Enhanced
 
-Tamagometer Enhanced Companion connects Flipper Zero to the
+Tamagometer Enhanced is a hybrid Flipper Zero application. Gifts can be sent
+entirely from its on-device interface, and it also connects Flipper Zero to the
 [Tamagometer Enhanced](https://github.com/MintCarasique/tamagometer-enhanced)
 Windows application. It supports:
 
@@ -9,9 +10,21 @@ Windows application. It supports:
 - a versioned CLI capability handshake;
 - progress reporting for Friends transmissions.
 
-The app registers the `tamagometer` USB CLI command. Keep this app open while
-using the desktop application, and do not run another Companion that registers
-the same command.
+## Standalone interface
+
+- Connection gifts are grouped into Food, Snacks, Items & Toys, Animations,
+  and Souvenirs & Special instead of one 181-item list.
+- Friends rewards are grouped into Jewelry and Gotchi Points.
+- Favorites, recently sent items, and the last successful transfer are stored
+  in the app data directory on the SD card.
+- The transfer screen provides animated antenna placement guidance, progress,
+  and cancellation with Back.
+- Settings include vibration feedback and one-file diagnostic export.
+- Item details use monochrome conversions of 171 original Tamagometer sprites.
+
+The app continues to register the `tamagometer` USB CLI command. Keep it open
+while using the Desktop application, and do not run another Companion that
+registers the same command.
 
 ## Install
 
@@ -29,6 +42,9 @@ ufbt
 ```
 
 The generated application is written to `dist/tamagometer_enhanced.fap`.
+
+The item icons can be regenerated from a checkout of the enhanced parent
+repository with `tools/convert_item_sprites.py`.
 
 ## CLI contract
 

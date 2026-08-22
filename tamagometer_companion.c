@@ -18,6 +18,8 @@
 #include <infrared_worker.h>
 
 #define MATCH_TIMING(x, v, delta) (((x) < ((v) + (delta))) && ((x) > ((v) - (delta))))
+#define COMPANION_VERSION "1.1.0"
+#define FRIENDS_REPEAT_COUNT 10
 
 typedef struct {
     bool command_decoded;
@@ -174,15 +176,27 @@ static bool friends_broadcast(PipeSide* pipe, uint8_t outcome) {
     furi_hal_rfid_tim_read_start(134800.0f, 0.5f);
     furi_hal_rfid_pin_pull_release();
     bool completed = true;
-    for(uint8_t repeat = 0; repeat < 10; repeat++) {
+    for(uint8_t repeat = 0; repeat < FRIENDS_REPEAT_COUNT; repeat++) {
         if(cli_is_pipe_broken_or_is_etx_next_char(pipe)) {
             completed = false;
             break;
         }
         friends_send_packet(connect_ack, sizeof(connect_ack));
+        if(cli_is_pipe_broken_or_is_etx_next_char(pipe)) {
+            completed = false;
+            break;
+        }
         furi_delay_ms(100);
         friends_send_packet(reward, sizeof(reward));
-        if(repeat != 9) furi_delay_ms(1000);
+        char progress[48];
+        snprintf(
+            progress,
+            sizeof(progress),
+            "[TAMAFRIENDS]progress=%u/%u[END]",
+            (unsigned int)(repeat + 1),
+            (unsigned int)FRIENDS_REPEAT_COUNT);
+        pipe_send(pipe, (unsigned char*)progress, strlen(progress));
+        if(repeat + 1 != FRIENDS_REPEAT_COUNT) furi_delay_ms(1000);
     }
     furi_hal_rfid_tim_read_stop();
     furi_hal_rfid_pins_reset();
@@ -198,7 +212,12 @@ static void cli_command(PipeSide* pipe, FuriString* args, void* context) {
     const char* value = furi_string_get_cstr(args);
     char bitstring[161];
     unsigned long outcome;
-    if(sscanf(value, "send%160s", bitstring) == 1) {
+    if(strcmp(value, "info") == 0) {
+        static const unsigned char info_message[] =
+            "[TAMAGOMETER]version=" COMPANION_VERSION
+            ";protocol=1;capabilities=connection_ir,friends_lf,friends_progress[END]";
+        pipe_send(pipe, info_message, sizeof(info_message) - 1);
+    } else if(sscanf(value, "send%160s", bitstring) == 1) {
         send_ir(bitstring);
     } else if(strcmp(value, "listen") == 0) {
         listen_ir(pipe);
@@ -211,7 +230,7 @@ static void cli_command(PipeSide* pipe, FuriString* args, void* context) {
             pipe_send(pipe, cancelled_message, sizeof(cancelled_message) - 1);
         }
     } else {
-        printf("Invalid argument(s). Use listen, send<bits>, or friends<0-255>.\r\n");
+        printf("Invalid argument(s). Use info, listen, send<bits>, or friends<0-255>.\r\n");
     }
     api_lock_unlock(app_state.cli_lock);
 }
@@ -230,6 +249,7 @@ int32_t tamagometer_companion(void* arg) {
     text_box_set_text(
         text_box,
         "Tamagometer Enhanced\n\n"
+        "Companion " COMPANION_VERSION "\n"
         "Connection: IR\n"
         "Friends: LF RFID\n\n"
         "Connect USB and open\n"

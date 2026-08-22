@@ -18,7 +18,7 @@
 #include <infrared_worker.h>
 
 #define MATCH_TIMING(x, v, delta) (((x) < ((v) + (delta))) && ((x) > ((v) - (delta))))
-#define COMPANION_VERSION "1.1.0"
+#define COMPANION_VERSION "1.2.0"
 #define FRIENDS_REPEAT_COUNT 10
 
 typedef struct {

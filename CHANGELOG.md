@@ -1,3 +1,6 @@
+v1.2.0:
+Desktop UI companion release; the versioned CLI protocol remains compatible with 1.1.
+
 v1.1.0:
 Added the versioned `info` capability handshake and Friends transmission progress.
 Updated documentation to distinguish the enhanced fork from the upstream project.

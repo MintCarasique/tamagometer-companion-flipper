@@ -1,34 +1,31 @@
 /**
- * @file tamagometer_companion.c
+ * Tamagometer Enhanced companion for Flipper Zero.
  *
- * This application will display a text box with some scrollable text in it.
- * Press the Back key to exit the application.
- * It will also add the command "tamagometer" to the CLI for use with
- * https://zacharesmer.github.io/tamagometer/
+ * Connection IR support is derived from Zach Resmer's MIT-licensed
+ * tamagometer-companion-flipper. Friends LF RFID timings and packets are
+ * derived from Natalie Silvanovich's published Proxmark implementation.
  */
 
 #include <furi.h>
-
+#include <api_lock.h>
+#include <cli/cli.h>
+#include <furi_hal_rfid.h>
 #include <gui/gui.h>
 #include <gui/modules/text_box.h>
 #include <gui/view_holder.h>
-
-#include <cli/cli.h>
-#include <furi_hal_infrared.h>
 #include <infrared.h>
 #include <infrared_transmit.h>
 #include <infrared_worker.h>
 
-#include <api_lock.h>
-
-// borrowed from infrared_common_i.h
 #define MATCH_TIMING(x, v, delta) (((x) < ((v) + (delta))) && ((x) > ((v) - (delta))))
 
-static struct {
+typedef struct {
     bool command_decoded;
     bool timed_out;
     FuriApiLock cli_lock;
-} app_state;
+} AppState;
+
+static AppState app_state;
 
 typedef struct {
     uint32_t header_mark;
@@ -42,283 +39,216 @@ typedef struct {
     uint32_t data_1_space;
     uint32_t data_1_space_tolerance;
     uint32_t ending_mark;
-    uint32_t ending_mark_tolerance;
-} DecoderStates;
+} DecoderTimings;
 
-// all in micro-seconds
-DecoderStates decoder_states = {
+static const DecoderTimings ir = {
     .header_mark = 9600,
     .header_mark_tolerance = 2000,
     .header_space = 5000,
     .header_space_tolerance = 1500,
     .data_mark = 550,
-    .data_mark_tolerance = 300, // max 850
+    .data_mark_tolerance = 300,
     .data_0_space = 600,
-    .data_0_space_tolerance = 400, // max 1000
+    .data_0_space_tolerance = 400,
     .data_1_space = 1500,
-    .data_1_space_tolerance = 500, // match the min long gap to max short gap: 1000
+    .data_1_space_tolerance = 500,
     .ending_mark = 1100,
-    .ending_mark_tolerance = 250, // match the min to max of data mark: 850
 };
 
-// This function will be called when the user presses the Back button.
-static void back_button_callback(void* context) {
-    // If a signal happens to be processing, wait for that to finish?
-    FuriApiLock exit_lock = context;
-    // Unlock the exit lock, thus enabling the app to exit.
-    api_lock_unlock(exit_lock);
+static void back_callback(void* context) {
+    api_lock_unlock((FuriApiLock)context);
 }
-
-// take in a signal from the IR worker, and decode it into a 160 bit tamagotchi
-// bit-string and store that in the provided buffer. Return true if success,
-// false if it was not a decodable message.
-//
-// This function does not check the checksum for validity.
-bool decode_signal_to_tamabits(InfraredWorkerSignal* received_signal, unsigned char* data_bits) {
-    furi_assert(received_signal);
-    // Get the timings from the recorded signal
+static bool decode_ir(InfraredWorkerSignal* signal, unsigned char* bits) {
     const uint32_t* timings;
-    size_t timings_cnt;
-    infrared_worker_get_raw_signal(received_signal, &timings, &timings_cnt);
-    // Check if there are at least 323 timings, otherwise the message won't fit
-    // and there's no possible way it's valid
-    if(timings_cnt < 323) {
+    size_t count;
+    infrared_worker_get_raw_signal(signal, &timings, &count);
+    if(count < 323) return false;
+    if(!MATCH_TIMING(timings[0], ir.header_mark, ir.header_mark_tolerance) ||
+       !MATCH_TIMING(timings[1], ir.header_space, ir.header_space_tolerance)) {
         return false;
     }
-    // Check first 2 values to see if they're a valid preamble
-    if(!(MATCH_TIMING(
-             timings[0], decoder_states.header_mark, decoder_states.header_mark_tolerance) &&
-         MATCH_TIMING(
-             timings[1], decoder_states.header_space, decoder_states.header_space_tolerance))) {
-        return false;
-    }
-    // Decode the next 160 pairs of bits, and store the result in data_bits
+
     size_t timing = 2;
-    for(size_t data_bit = 0; data_bit < 160; data_bit++) {
-        if(MATCH_TIMING(
-               timings[timing], decoder_states.data_mark, decoder_states.data_mark_tolerance)) {
-            if(MATCH_TIMING(
-                   timings[timing + 1],
-                   decoder_states.data_0_space,
-                   decoder_states.data_0_space_tolerance)) {
-                // It's a 0, store it
-                data_bits[data_bit] = '0';
-            } else if(MATCH_TIMING(
-                          timings[timing + 1],
-                          decoder_states.data_1_space,
-                          decoder_states.data_1_space_tolerance)) {
-                // It's a 1, store it
-                data_bits[data_bit] = '1';
-            } else {
-                // It's not a valid 1 or 0, give up
-                return false;
-            }
+    for(size_t bit = 0; bit < 160; bit++, timing += 2) {
+        if(!MATCH_TIMING(timings[timing], ir.data_mark, ir.data_mark_tolerance)) return false;
+        if(MATCH_TIMING(timings[timing + 1], ir.data_0_space, ir.data_0_space_tolerance)) {
+            bits[bit] = '0';
+        } else if(MATCH_TIMING(
+                      timings[timing + 1], ir.data_1_space, ir.data_1_space_tolerance)) {
+            bits[bit] = '1';
+        } else {
+            return false;
         }
-        timing += 2;
     }
-    // I could check that the last mark is the end mark length (longer than a data
-    // bit mark) but if we got 160 data bits that's good enough
     return true;
 }
 
-static void signal_received_callback(void* pipe, InfraredWorkerSignal* received_signal) {
-    // todo: set processing_started flag
-    furi_assert(received_signal);
-    unsigned char tamabits[160];
-
-    if(decode_signal_to_tamabits(received_signal, tamabits)) {
-        // print out the signal
-        // cli_write(cli, (uint8_t*)tamabits, 160);
-        FURI_LOG_I("TEST", "I saw a signal!!!!");
+static void signal_received(void* pipe, InfraredWorkerSignal* signal) {
+    unsigned char bits[160];
+    if(decode_ir(signal, bits)) {
         pipe_send(pipe, (unsigned char*)"[PICO]", 6);
-        pipe_send(pipe, tamabits, 160);
-        pipe_send(pipe, (unsigned char*)"[END]", 6);
+        pipe_send(pipe, bits, 160);
+        pipe_send(pipe, (unsigned char*)"[END]", 5);
         app_state.command_decoded = true;
-
-    } else {
-        // Do nothing I guess
-        printf("Invalid signal received");
     }
-    // // todo: set processing finished flag
 }
 
-static void timed_out_callback(void* arg) {
-    UNUSED(arg);
+static void listen_timeout(void* context) {
+    UNUSED(context);
     app_state.timed_out = true;
 }
 
-static void listen(void* context) {
-    // set a timeout so the command will exit after 1 second
-    FuriTimer* timer = furi_timer_alloc(timed_out_callback, FuriTimerTypeOnce, context);
+static void listen_ir(PipeSide* pipe) {
+    FuriTimer* timer = furi_timer_alloc(listen_timeout, FuriTimerTypeOnce, NULL);
     furi_timer_start(timer, furi_ms_to_ticks(1000));
-    // furi_timer_restart(timer, furi_ms_to_ticks(1000));
-
     InfraredWorker* worker = infrared_worker_alloc();
-    infrared_worker_rx_set_received_signal_callback(worker, signal_received_callback, context);
+    infrared_worker_rx_set_received_signal_callback(worker, signal_received, pipe);
     infrared_worker_rx_start(worker);
-    // default timeout value is 150,000 us, I need it shorter.
-    furi_hal_infrared_async_rx_set_timeout(
-        decoder_states.header_space + decoder_states.header_space_tolerance);
+    furi_hal_infrared_async_rx_set_timeout(ir.header_space + ir.header_space_tolerance);
 
-    // printf("Receiving %s INFRARED...\r\nPress Ctrl+C to abort\r\n", "RAW");
-    while(!(app_state.command_decoded || app_state.timed_out || cli_is_pipe_broken_or_is_etx_next_char(context))) {
+    while(!app_state.command_decoded && !app_state.timed_out &&
+          !cli_is_pipe_broken_or_is_etx_next_char(pipe)) {
         furi_delay_ms(1);
     }
-
-    // TODO: worry about the race condition where the timer times out while the
-    // signal received callback is running and processing the signal. Could add a
-    // flag that's set when a command starts processing and then make it wait
-    // until that's done. If it's successful, do nothing because it will print the
-    // decoded signal. If it was unsuccessful, print timed out message. There is
-    // still a possibility that the signal is being received while the timer times
-    // out. What happens then? At best it will get lost, at worst the callback
-    // will be called and cause a null pointer dereference. Hmph.
-
     if(app_state.timed_out) {
-        printf("[PICO]timed out[END]");
+        static const unsigned char timeout_message[] = "[PICO]timed out[END]";
+        pipe_send(pipe, timeout_message, sizeof(timeout_message) - 1);
     }
-
     infrared_worker_rx_stop(worker);
     infrared_worker_free(worker);
     furi_timer_stop(timer);
     furi_timer_free(timer);
 }
 
-static bool tamabits_to_timings(char* bitstring, uint32_t* timings) {
-    // check if bitstring is 160 chars
-    if(strlen(bitstring) != 160) {
-        return false;
-    }
-    timings[0] = decoder_states.header_mark;
-    timings[1] = decoder_states.header_space;
-    size_t t = 2;
-    for(size_t i = 0; i < 160; i++) {
-        timings[t] = decoder_states.data_mark;
-        if(bitstring[i] == '0') {
-            timings[t + 1] = decoder_states.data_0_space;
-        } else if(bitstring[i] == '1') {
-            timings[t + 1] = decoder_states.data_1_space;
+static bool ir_bits_to_timings(const char* bitstring, uint32_t* timings) {
+    if(strlen(bitstring) != 160) return false;
+    timings[0] = ir.header_mark;
+    timings[1] = ir.header_space;
+    size_t output = 2;
+    for(size_t bit = 0; bit < 160; bit++) {
+        timings[output++] = ir.data_mark;
+        if(bitstring[bit] == '0') {
+            timings[output++] = ir.data_0_space;
+        } else if(bitstring[bit] == '1') {
+            timings[output++] = ir.data_1_space;
         } else {
             return false;
         }
-        t += 2;
     }
-    timings[t] = decoder_states.ending_mark;
+    timings[output] = ir.ending_mark;
     return true;
 }
 
-static void send(char* bitstring) {
-    // 2 timings for preamble, 320 for bits, 1 for ending mark
-    uint32_t timings[2 + 320 + 1];
-    if(tamabits_to_timings(bitstring, timings)) {
-        infrared_send_raw(timings, 323, true);
-    }
+static void send_ir(const char* bitstring) {
+    uint32_t timings[323];
+    if(ir_bits_to_timings(bitstring, timings)) infrared_send_raw(timings, 323, true);
 }
 
-static void tamagometer_start_cli(PipeSide* pipe, FuriString* args, void* context) {
-    UNUSED(context);
-    // Acquire the cli_lock so that the GUI part of the app will wait to exit
-    // if the CLI is still running something. This should hopefully reduce the
-    // number of null pointer dereferences on exit
-    api_lock_relock(app_state.cli_lock);
-    FURI_LOG_I("TEST", "CLI ran...");
+static void friends_send_byte(uint8_t value) {
+    /* Field-on/off timings from the published working Proxmark transmitter. */
+    furi_hal_rfid_tim_read_continue();
+    furi_delay_us(540);
+    furi_hal_rfid_tim_read_pause();
+    for(int8_t bit = 7; bit >= 0; bit--) {
+        furi_hal_rfid_tim_read_pause();
+        furi_delay_us((value & (1U << bit)) ? 650 : 270);
+        furi_hal_rfid_tim_read_continue();
+        furi_delay_us(150);
+    }
+    furi_hal_rfid_tim_read_pause();
+    furi_delay_us(210);
+}
 
+static void friends_send_packet(const uint8_t* packet, size_t length) {
+    for(size_t i = 0; i < length; i++) friends_send_byte(packet[i]);
+}
+
+static bool friends_broadcast(PipeSide* pipe, uint8_t outcome) {
+    static const uint8_t connect_ack[] = {
+        0xF0, 0x01, 0x0F, 0x01, 0x01, 0x0F, 0x0B, 0x00, 0x06, 0x80,
+        0x02, 0x08, 0x01, 0x08, 0x1A, 0x1A, 0x1A, 0x1A, 0x2D,
+    };
+    uint8_t reward[] = {0xF0, 0x07, 0x05, 0x01, 0x07, 0x0F, 0x0B, outcome, 0x00};
+    reward[8] = (uint8_t)(0x2E + outcome);
+
+    furi_hal_rfid_tim_read_start(134800.0f, 0.5f);
+    furi_hal_rfid_pin_pull_release();
+    bool completed = true;
+    for(uint8_t repeat = 0; repeat < 10; repeat++) {
+        if(cli_is_pipe_broken_or_is_etx_next_char(pipe)) {
+            completed = false;
+            break;
+        }
+        friends_send_packet(connect_ack, sizeof(connect_ack));
+        furi_delay_ms(100);
+        friends_send_packet(reward, sizeof(reward));
+        if(repeat != 9) furi_delay_ms(1000);
+    }
+    furi_hal_rfid_tim_read_stop();
+    furi_hal_rfid_pins_reset();
+    return completed;
+}
+
+static void cli_command(PipeSide* pipe, FuriString* args, void* context) {
+    UNUSED(context);
+    api_lock_relock(app_state.cli_lock);
     app_state.command_decoded = false;
     app_state.timed_out = false;
 
-    const char* args_string = furi_string_get_cstr(args);
+    const char* value = furi_string_get_cstr(args);
     char bitstring[161];
-    if(sscanf(args_string, "send%s", bitstring)) {
-        // send the bitstring
-        send(bitstring);
-    } else if(strcmp(args_string, "listen") == 0) {
-        // listen
-        listen(pipe);
+    unsigned long outcome;
+    if(sscanf(value, "send%160s", bitstring) == 1) {
+        send_ir(bitstring);
+    } else if(strcmp(value, "listen") == 0) {
+        listen_ir(pipe);
+    } else if(sscanf(value, "friends%lu", &outcome) == 1 && outcome <= 255) {
+        if(friends_broadcast(pipe, (uint8_t)outcome)) {
+            static const unsigned char ok_message[] = "[TAMAFRIENDS]ok[END]";
+            pipe_send(pipe, ok_message, sizeof(ok_message) - 1);
+        } else {
+            static const unsigned char cancelled_message[] = "[TAMAFRIENDS]cancelled[END]";
+            pipe_send(pipe, cancelled_message, sizeof(cancelled_message) - 1);
+        }
     } else {
-        printf("Arguments: \"%s\"\n", args_string);
-        printf("Invalid argument(s).\n");
+        printf("Invalid argument(s). Use listen, send<bits>, or friends<0-255>.\r\n");
     }
     api_lock_unlock(app_state.cli_lock);
-    return;
 }
 
 int32_t tamagometer_companion(void* arg) {
     UNUSED(arg);
-
-    // Create a lock that will be held any time the CLI command runs. It should be unlocked to start.
-    // This is used to wait for it to exit the GUI part of the app and free everything
     app_state.cli_lock = api_lock_alloc_locked();
     api_lock_unlock(app_state.cli_lock);
 
-    // Add the CLI command that the website will use to do stuff.
-    // It will be removed when the GUI program exits.
     CliRegistry* cli = furi_record_open(RECORD_CLI);
-    FURI_LOG_I("TEST", "Adding command to CLI...");
-    cli_registry_add_command(cli, "tamagometer", CliCommandFlagParallelSafe, tamagometer_start_cli, NULL);
+    cli_registry_add_command(cli, "tamagometer", CliCommandFlagParallelSafe, cli_command, NULL);
     furi_record_close(RECORD_CLI);
 
-    // Access the GUI API instance.
     Gui* gui = furi_record_open(RECORD_GUI);
-    // Create a TextBox view. The Gui object only accepts
-    // ViewPort instances, so we will need to address that later.
     TextBox* text_box = text_box_alloc();
-    // Set some text so that the text box is not empty.
     text_box_set_text(
         text_box,
-        "Connect to\n"
-        "zacharesmer.github.io/tamagometer\n\n"
-        "Press \"Back\" to exit.");
-
-    // Create a ViewHolder instance. It will serve as an adapter to convert
-    // between the View type provided by the TextBox view and the ViewPort type
-    // that the GUI can actually display.
-    ViewHolder* view_holder = view_holder_alloc();
-    // Let the GUI know about this ViewHolder instance.
-    view_holder_attach_to_gui(view_holder, gui);
-    // Set the view that we want to display.
-    view_holder_set_view(view_holder, text_box_get_view(text_box));
-
-    // The part below is not really related to this example, but is necessary for
-    // it to function. We need to somehow stall the application thread so that the
-    // view stays on the screen (otherwise the app will just exit and won't
-    // display anything) and at the same time we need a way to quit out of the
-    // application.
-
-    // In this example, a simple FuriApiLock instance is used. A real-world
-    // application is likely to have some kind of event handling loop here
-    // instead. (see the ViewDispatcher example or one of FuriEventLoop examples
-    // for that).
-
-    // Create a pre-locked FuriApiLock instance.
+        "Tamagometer Enhanced\n\n"
+        "Connection: IR\n"
+        "Friends: LF RFID\n\n"
+        "Connect USB and open\n"
+        "Tamagometer Desktop.\n\n"
+        "Press Back to exit.");
+    ViewHolder* holder = view_holder_alloc();
+    view_holder_attach_to_gui(holder, gui);
+    view_holder_set_view(holder, text_box_get_view(text_box));
     FuriApiLock exit_lock = api_lock_alloc_locked();
-    // Set a Back event callback for the ViewHolder instance. It will be called
-    // when the user presses the Back button. We pass the exit lock instance as
-    // the context to be able to access it inside the callback function.
-    view_holder_set_back_callback(view_holder, back_button_callback, exit_lock);
-
-    // This call will block the application thread from running until the exit
-    // lock gets unlocked somehow (the only way it can happen in this example is
-    // via the back callback).
+    view_holder_set_back_callback(holder, back_callback, exit_lock);
     api_lock_wait_unlock_and_free(exit_lock);
 
-    // The back key has been pressed, which unlocked the exit lock. The
-    // application is about to exit.
-
-    // Remove the CLI command so it can't be used again
-    CliRegistry* cli2 = furi_record_open(RECORD_CLI);
-    FURI_LOG_I("TEST", "Deleting command from CLI...");
-    cli_registry_delete_command(cli2, "tamagometer");
+    cli = furi_record_open(RECORD_CLI);
+    cli_registry_delete_command(cli, "tamagometer");
     furi_record_close(RECORD_CLI);
-    // Wait for the CLI command to exit if it is running.
     api_lock_wait_unlock_and_free(app_state.cli_lock);
-
-    // The view must be removed from a ViewHolder instance before deleting it.
-    view_holder_set_view(view_holder, NULL);
-    // Delete everything to prevent memory leaks.
-    view_holder_free(view_holder);
+    view_holder_set_view(holder, NULL);
+    view_holder_free(holder);
     text_box_free(text_box);
-    // End access to the GUI API.
     furi_record_close(RECORD_GUI);
-
     return 0;
 }

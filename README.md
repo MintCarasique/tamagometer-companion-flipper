@@ -1,4 +1,20 @@
-# Tamagometer Companion Flipper App
+# Tamagometer Enhanced Companion
+
+This fork keeps the original Tamagotchi Connection 2024 infrared bridge and
+adds low-frequency RFID transmission for **Tamagotchi Friends BFF BUMP**. It is
+used by the desktop application in
+[`MintCarasique/tamagometer-enhanced`](https://github.com/MintCarasique/tamagometer-enhanced).
+
+The app registers the same `tamagometer` CLI command as the original Companion,
+so only one version should be open on the Flipper at a time. Friends support is
+available through `tamagometer friends<0-255>` and has been verified with a
+physical Tamagotchi Friends and Flipper Zero.
+
+Build with `ufbt`, then copy `dist/tamagometer_companion.fap` to
+`SD Card/apps/Tools`.
+
+## Original project information
+
 The web app it's a companion for: https://zacharesmer.github.io/tamagometer/
 
 Main tamagometer repo: https://github.com/zacharesmer/tamagometer

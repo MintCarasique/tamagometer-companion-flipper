@@ -42,49 +42,65 @@ static const char *stage_text(TamaTransferStage stage) {
 }
 
 static void draw_connection_guide(Canvas *canvas, uint8_t frame) {
-  canvas_draw_rframe(canvas, 3, 22, 31, 19, 3);
-  canvas_draw_str(canvas, 8, 35, "FLIP");
-  canvas_draw_rframe(canvas, 94, 22, 31, 19, 8);
-  canvas_draw_circle(canvas, 109, 31, 5);
+  canvas_draw_rframe(canvas, 3, 20, 31, 19, 3);
+  canvas_draw_str(canvas, 8, 33, "FLIP");
+  canvas_draw_rframe(canvas, 94, 20, 31, 19, 8);
+  canvas_draw_circle(canvas, 109, 29, 5);
   for (uint8_t beam = 0; beam < 3; beam++) {
     int32_t x = 40 + beam * 16 + ((frame + beam) % 3);
-    canvas_draw_line(canvas, x, 28, x + 8, 28);
-    canvas_draw_line(canvas, x, 34, x + 8, 34);
+    canvas_draw_line(canvas, x, 26, x + 8, 26);
+    canvas_draw_line(canvas, x, 32, x + 8, 32);
   }
-  canvas_draw_str_aligned(canvas, 64, 20, AlignCenter, AlignBottom,
+  canvas_draw_str_aligned(canvas, 64, 18, AlignCenter, AlignBottom,
                           "Align IR ports");
 }
 
 static void draw_friends_guide(Canvas *canvas, uint8_t frame) {
-  canvas_draw_rframe(canvas, 23, 24, 42, 20, 3);
-  canvas_draw_str(canvas, 31, 38, "FLIP");
-  canvas_draw_rframe(canvas, 62, 20, 42, 26, 8);
-  canvas_draw_circle(canvas, 83, 33, 7 + (frame % 2));
+  canvas_draw_rframe(canvas, 23, 21, 42, 20, 3);
+  canvas_draw_str(canvas, 31, 35, "FLIP");
+  canvas_draw_rframe(canvas, 62, 19, 42, 24, 8);
+  canvas_draw_circle(canvas, 83, 31, 6 + (frame % 2));
   canvas_draw_str_aligned(canvas, 64, 18, AlignCenter, AlignBottom,
                           "Back-to-back on LF");
+}
+
+static void draw_fitted_title(Canvas *canvas, const char *source) {
+  char title[34];
+  strlcpy(title, source, sizeof(title));
+  size_t length = strlen(title);
+  bool shortened = false;
+  while (length > 3 && canvas_string_width(canvas, title) > 124) {
+    title[--length] = '\0';
+    shortened = true;
+  }
+  if (shortened && length > 3) {
+    title[length - 3] = '.';
+    title[length - 2] = '.';
+    title[length - 1] = '.';
+  }
+  canvas_draw_str_aligned(canvas, 64, 1, AlignCenter, AlignTop, title);
 }
 
 static void transfer_view_draw(Canvas *canvas, void *model_pointer) {
   TransferViewModel *model = model_pointer;
   canvas_clear(canvas);
-  canvas_set_font(canvas, FontPrimary);
-  canvas_draw_str_aligned(canvas, 64, 1, AlignCenter, AlignTop,
-                          model->item_name);
   canvas_set_font(canvas, FontSecondary);
+  draw_fitted_title(canvas, model->item_name);
   if (model->mode == TamaModeFriends) {
     draw_friends_guide(canvas, model->animation_frame);
   } else {
     draw_connection_guide(canvas, model->animation_frame);
   }
-  char progress_text[24];
-  snprintf(progress_text, sizeof(progress_text), "%s %u/%u",
-           stage_text(model->stage), (unsigned int)model->current,
-           (unsigned int)model->total);
+  canvas_draw_str_aligned(canvas, 2, 52, AlignLeft, AlignBottom,
+                          stage_text(model->stage));
+  char progress_text[10];
+  snprintf(progress_text, sizeof(progress_text), "%u/%u",
+           (unsigned int)model->current, (unsigned int)model->total);
+  canvas_draw_str_aligned(canvas, 126, 52, AlignRight, AlignBottom,
+                          progress_text);
   float progress =
       model->total ? (float)model->current / (float)model->total : 0.0f;
-  elements_progress_bar_with_text(canvas, 3, 47, 122, progress, progress_text);
-  if (model->cancellable)
-    elements_button_left(canvas, "Cancel");
+  elements_progress_bar(canvas, 3, 54, 122, progress);
 }
 
 static bool transfer_view_input(InputEvent *event, void *context) {

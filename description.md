@@ -1,11 +1,13 @@
-# Tamagometer Companion
-Use your Flipper as an IR bridge to talk to Tamagotchi Connection (2024)!
+# Tamagometer Enhanced Companion
 
-## Usage
-Plug your Flipper into a computer with the USB cable, and open the Tamagometer Companion App.
+Use Flipper Zero with Tamagometer Enhanced to send Connection 2024 gifts over
+infrared and Tamagotchi Friends BFF rewards over LF RFID.
 
-On the computer, open the tamagometer web app 
-- Link: https://zacharesmer.github.io/tamagometer/.
-- Github: https://github.com/zacharesmer/tamagometer 
+Install the Desktop and Companion from the same enhanced release:
+https://github.com/MintCarasique/tamagometer-enhanced/releases/latest
 
-If you have two tamagotchis, record some interactions, save them, and play them back. If you just have one, try some of the interactions in the "Starter Pack".
+This application is an independent enhanced fork of the MIT-licensed original
+Flipper Companion:
+https://github.com/zacharesmer/tamagometer-companion-flipper
+
+The original repository is linked for attribution and project history.

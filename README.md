@@ -1,49 +1,56 @@
 # Tamagometer Enhanced Companion
 
-This fork keeps the original Tamagotchi Connection 2024 infrared bridge and
-adds low-frequency RFID transmission for **Tamagotchi Friends BFF BUMP**. It is
-used by the desktop application in
-[`MintCarasique/tamagometer-enhanced`](https://github.com/MintCarasique/tamagometer-enhanced).
+Tamagometer Enhanced Companion connects Flipper Zero to the
+[Tamagometer Enhanced](https://github.com/MintCarasique/tamagometer-enhanced)
+Windows application. It supports:
 
-The app registers the same `tamagometer` CLI command as the original Companion,
-so only one version should be open on the Flipper at a time. Friends support is
-available through `tamagometer friends<0-255>` and has been verified with a
-physical Tamagotchi Friends and Flipper Zero.
+- Tamagotchi Connection 2024 infrared receive and transmit;
+- Tamagotchi Friends BFF BUMP responses over LF RFID;
+- a versioned CLI capability handshake;
+- progress reporting for Friends transmissions.
 
-Build with `ufbt`, then copy `dist/tamagometer_companion.fap` to
-`SD Card/apps/Tools`.
+The app registers the `tamagometer` USB CLI command. Keep this app open while
+using the desktop application, and do not run another Companion that registers
+the same command.
 
-## Original project information
+## Install
 
-The web app it's a companion for: https://zacharesmer.github.io/tamagometer/
+Download `TamagometerEnhanced.fap` from the
+[latest enhanced release](https://github.com/MintCarasique/tamagometer-enhanced/releases/latest)
+and copy it to `SD Card/apps/Tools` on the Flipper. The Desktop and Companion
+versions should come from the same release.
 
-Main tamagometer repo: https://github.com/zacharesmer/tamagometer
+## Build
 
-## Flipper App Catalog
-You can use the Flipper App catalog to install the most recent release of this app. Search "Tamagometer" or look in the Infrared category.
+Install [uFBT](https://github.com/flipperdevices/flipperzero-ufbt), then run:
 
-## ~~Download a pre-built version~~
+```sh
+ufbt
+```
 
-*Note: Currently, the easiest and recommended way to install this is through the app catalog. This was the way to get it before it was available there*
+The generated application is written to `dist/tamagometer_companion.fap`.
 
-Find the most recent workflow run [here](https://github.com/zacharesmer/tamagometer-companion-flipper/actions), download the artifact, and put the `.fap` file on your Flipper's SD card. It automatically builds once a day (or it's supposed to, anyway) to keep up with the most recent release version of the Flipper's firmware. 
+## CLI contract
 
-## Building and Running
-You can also build the app yourself. Install uFBT with the instructions in the [uFBT repo](https://github.com/flipperdevices/flipperzero-ufbt). Essentially:
+- `tamagometer info` reports the Companion version, protocol version, and
+  capabilities;
+- `tamagometer listen` receives a Connection IR frame;
+- `tamagometer send<bits>` transmits a 160-bit Connection IR frame;
+- `tamagometer friends<0-255>` broadcasts a Friends BFF outcome.
 
-- Make a Python virtual environment and activate it (optional but recommended if you ever use Python for anything else on your computer)
-- `python3 -m pip install --upgrade ufbt`
-- From the root of this repository, and with your Flipper plugged into your computer, `ufbt launch`
+## Fork relationship and attribution
 
-## Usage
-The app needs to be open on your Flipper for the website to work correctly. When the app is opened, it adds the CLI command `tamagometer` to the flipper. When it's closed it removes the command.
+This enhanced Companion is an independent fork of Zach Resmer's MIT-licensed
+[tamagometer-companion-flipper](https://github.com/zacharesmer/tamagometer-companion-flipper),
+originally created for the upstream
+[Tamagometer](https://github.com/zacharesmer/tamagometer) web application.
+The upstream repositories are linked here for attribution and project history;
+enhanced downloads and support belong to the Tamagometer Enhanced repository.
+
+Friends LF RFID behavior is based on the published Tamagotchi Friends research
+credited in the main repository README.
 
 ## Disclaimer
-This project is entirely unofficial and not affiliated with Tamagotchi or Bandai. 
 
-## Other
-I learned a lot about Flipper apps and the Flipper in general making this, and I've written some of it down in case it helps anyone else.
-
-[part 1](https://resmer.co.za/ch/posts/flipper-app-general-advice/)
-
-[part 2](https://resmer.co.za/ch/posts/flipper-app-tamagometer/)
+This project is unofficial and is not affiliated with Bandai, Tamagotchi, or
+Flipper Devices.

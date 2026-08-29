@@ -36,4 +36,5 @@ bool tama_settings_is_recent(const TamaSettings *settings, TamaMode mode,
                              uint8_t item_id);
 bool tama_settings_export_diagnostics(const TamaSettings *settings,
                                       const char *app_version,
-                                      const char *last_status);
+                                      const char *last_status,
+                                      const char *runtime_details);

@@ -2,7 +2,9 @@ v2.0.0 (development):
 Added a standalone SceneManager interface, categorized catalogs, favorites,
 recent items, repeat transfer, native Connection orchestration, progress,
 placement guidance, item artwork, diagnostics, and vibration. The Desktop CLI
-remains available and shares the same protocol implementation.
+remains available and shares the same protocol implementation. Added a
+hardware-verified original V2/V3 compatibility fallback, passive legacy IR
+sniffer, and low-level timing-safe legacy transmitter.
 
 v1.2.0:
 Desktop UI companion release; the versioned CLI protocol remains compatible with 1.1.

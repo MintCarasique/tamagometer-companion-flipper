@@ -166,23 +166,27 @@ bool tama_settings_is_recent(const TamaSettings *settings, TamaMode mode,
 
 bool tama_settings_export_diagnostics(const TamaSettings *settings,
                                       const char *app_version,
-                                      const char *last_status) {
-  char report[512];
+                                      const char *last_status,
+                                      const char *runtime_details) {
+  char report[768];
   int length = snprintf(
       report, sizeof(report),
       "Tamagometer Enhanced diagnostic report\n"
       "App version: %s\n"
       "Protocol: 1\n"
-      "Capabilities: standalone_ui,connection_ir,friends_lf,hybrid_cli\n"
+      "Capabilities: standalone_ui,connection_ir,connection_legacy,"
+      "connection_sniffer,friends_lf,hybrid_cli\n"
       "Vibration: %s\n"
       "Onboarding complete: %s\n"
       "Recent transfers: %u\n"
       "Last transfer configured: %s\n"
-      "Last runtime status: %s\n",
+      "Last runtime status: %s\n"
+      "%s",
       app_version, settings->vibration ? "on" : "off",
       settings->onboarding_complete ? "yes" : "no",
       (unsigned int)settings->recent_count, settings->last_valid ? "yes" : "no",
-      last_status ? last_status : "none");
+      last_status ? last_status : "none",
+      runtime_details ? runtime_details : "");
   if (length < 0 || (size_t)length >= sizeof(report))
     return false;
 

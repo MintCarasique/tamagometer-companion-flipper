@@ -32,6 +32,8 @@ static const char *stage_text(TamaTransferStage stage) {
     return "Wait request";
   case TamaTransferStageSendingGift:
     return "Send gift";
+  case TamaTransferStageSendingResult:
+    return "Send result";
   case TamaTransferStageBroadcasting:
     return "BFF broadcast";
   case TamaTransferStageComplete:

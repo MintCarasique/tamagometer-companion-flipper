@@ -3,6 +3,9 @@
 Use Flipper Zero with Tamagometer Enhanced to send Connection 2024 gifts over
 infrared and Tamagotchi Friends BFF rewards over LF RFID.
 
+The standalone and Desktop interfaces also include a hardware-verified original
+Connection V2/V3 compatibility fallback and a passive legacy IR sniffer.
+
 Install the Desktop and Companion from the same enhanced release:
 https://github.com/MintCarasique/tamagometer-enhanced/releases/latest
 

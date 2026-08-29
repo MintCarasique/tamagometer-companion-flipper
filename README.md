@@ -21,6 +21,37 @@ Windows application. It supports:
   and cancellation with Back.
 - Settings include vibration feedback and one-file diagnostic export.
 - Item details use monochrome conversions of 171 original Tamagometer sprites.
+- Connection Sniffer passively records complete original V1/V2/V3 infrared
+  sessions without transmitting. Captures contain timestamps, decoded legacy
+  bytes, checksum results, and raw timings.
+- Original fallback answers a Connection V2 in `Version 1` mode or a
+  Connection V3 in `Others` mode either standalone or through the Desktop
+  application. The random game/gift exchange is verified on both original
+  devices, while fields without sufficient captures remain experimental.
+
+### Original V2/V3 fallback
+
+1. Open **Original fallback** on the Flipper.
+2. On a V2 choose **Version 1**, or on a V3 choose **Others**, and start the
+   connection.
+3. Point the Tamagotchi IR window at the Flipper and keep both devices still.
+
+The Tamagotchi chooses whether the connection becomes a game or a gift. In the
+current implementation the Flipper reports the captured responder-win outcome
+for games; the Tamagotchi therefore loses. For gifts, the receiving Tamagotchi
+chooses the visible result from its own state. The Flipper uses fixed V2/V3 peer
+profiles derived from hardware captures, so testing can update the
+Tamagotchi's friend and relationship data.
+
+Legacy replies use the low-level infrared HAL because the normal Flipper raw
+remote helper adds 180 ms of leading silence. That delay misses the original
+Connection response window even when the packet bytes and raw timings are
+otherwise correct.
+
+Sniffer files are saved in the app data directory as
+`connection_capture_000.txt`, `connection_capture_001.txt`, and so on. Retrieve
+them with qFlipper from
+`SD Card/apps_data/tamagometer_enhanced/` after stopping the capture.
 
 The app continues to register the `tamagometer` USB CLI command. Keep it open
 while using the Desktop application, and do not run another Companion that
@@ -52,6 +83,7 @@ repository with `tools/convert_item_sprites.py`.
   capabilities;
 - `tamagometer listen` receives a Connection IR frame;
 - `tamagometer send<bits>` transmits a 160-bit Connection IR frame;
+- `tamagometer legacy` runs one original V2/V3 compatibility exchange;
 - `tamagometer friends<0-255>` broadcasts a Friends BFF outcome.
 
 ## Fork relationship and attribution

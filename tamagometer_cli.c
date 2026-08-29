@@ -27,6 +27,15 @@ static void pipe_progress(TamaTransferStage stage, uint8_t current,
   pipe_send((PipeSide *)context, (unsigned char *)message, strlen(message));
 }
 
+static void pipe_legacy_progress(TamaTransferStage stage, uint8_t current,
+                                 uint8_t total, void *context) {
+  UNUSED(stage);
+  char message[48];
+  snprintf(message, sizeof(message), "[TAMALEGACY]progress=%u/%u[END]",
+           (unsigned int)current, (unsigned int)total);
+  pipe_send((PipeSide *)context, (unsigned char *)message, strlen(message));
+}
+
 static void cli_command(PipeSide *pipe, FuriString *args, void *context) {
   TamagometerCli *cli_context = context;
   api_lock_relock(cli_context->active_lock);
@@ -37,8 +46,8 @@ static void cli_command(PipeSide *pipe, FuriString *args, void *context) {
   if (strcmp(value, "info") == 0) {
     static const unsigned char info_message[] =
         "[TAMAGOMETER]version=" COMPANION_VERSION
-        ";protocol=1;capabilities=connection_ir,friends_lf,friends_progress,"
-        "standalone_ui[END]";
+        ";protocol=1;capabilities=connection_ir,connection_legacy,"
+        "connection_sniffer,friends_lf,friends_progress,standalone_ui[END]";
     pipe_send(pipe, info_message, sizeof(info_message) - 1U);
   } else if (furi_mutex_acquire(cli_context->radio_mutex, FuriWaitForever) ==
              FuriStatusOk) {
@@ -56,6 +65,20 @@ static void cli_command(PipeSide *pipe, FuriString *args, void *context) {
         static const unsigned char timeout_message[] = "[PICO]timed out[END]";
         pipe_send(pipe, timeout_message, sizeof(timeout_message) - 1U);
       }
+    } else if (strcmp(value, "legacy") == 0) {
+      TamaLegacySummary summary = {0};
+      TamaTransferResult result = tama_protocol_legacy_fallback(
+          pipe_cancelled, pipe_legacy_progress, pipe, &summary);
+      const char *peer = summary.peer == TamaLegacyPeerV2
+                             ? "v2"
+                             : summary.peer == TamaLegacyPeerV3 ? "v3"
+                                                                : "unknown";
+      char message[96];
+      snprintf(message, sizeof(message),
+               "[TAMALEGACY]result=%s;activity=%s;peer=%s[END]",
+               tama_protocol_result_text(result),
+               tama_protocol_legacy_activity_text(summary.activity), peer);
+      pipe_send(pipe, (unsigned char *)message, strlen(message));
     } else if (sscanf(value, "friends%lu", &outcome) == 1 && outcome <= 255) {
       TamaTransferResult result = tama_protocol_friends_transfer(
           (uint8_t)outcome, pipe_cancelled, pipe_progress, pipe);
@@ -68,7 +91,7 @@ static void cli_command(PipeSide *pipe, FuriString *args, void *context) {
         pipe_send(pipe, cancelled_message, sizeof(cancelled_message) - 1U);
       }
     } else {
-      printf("Invalid argument(s). Use info, listen, send<bits>, or "
+      printf("Invalid argument(s). Use info, listen, send<bits>, legacy, or "
              "friends<0-255>.\r\n");
     }
     furi_mutex_release(cli_context->radio_mutex);

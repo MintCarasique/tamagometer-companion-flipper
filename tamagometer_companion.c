@@ -19,7 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define APP_VERSION "2.0.0-dev"
+#define APP_VERSION "2.0.0"
 #define MENU_LABEL_LIMIT 65U
 #define MENU_LABEL_LENGTH 40U
 

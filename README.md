@@ -10,6 +10,10 @@ Windows application. It supports:
 - a versioned CLI capability handshake;
 - progress reporting for Friends transmissions.
 
+Current stable Companion version: **2.0.0**. Install it together with the
+Desktop build from the same release. Companion-specific changes are recorded
+in [`CHANGELOG.md`](CHANGELOG.md).
+
 ## Standalone interface
 
 - Connection gifts are grouped into Food, Snacks, Items & Toys, Animations,

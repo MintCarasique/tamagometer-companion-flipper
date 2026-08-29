@@ -1,24 +1,66 @@
-v2.0.0 (development):
-Added a standalone SceneManager interface, categorized catalogs, favorites,
-recent items, repeat transfer, native Connection orchestration, progress,
-placement guidance, item artwork, diagnostics, and vibration. The Desktop CLI
-remains available and shares the same protocol implementation. Added a
-hardware-verified original V2/V3 compatibility fallback, passive legacy IR
-sniffer, and low-level timing-safe legacy transmitter.
+# Changelog
 
-v1.2.0:
-Desktop UI companion release; the versioned CLI protocol remains compatible with 1.1.
+## [2.0.0] - 2026-08-29
 
-v1.1.0:
-Added the versioned `info` capability handshake and Friends transmission progress.
-Updated documentation to distinguish the enhanced fork from the upstream project.
+### Added
 
-v1.0.0:
-Added Tamagotchi Friends BFF BUMP support while retaining Connection 2024 IR support.
+- Standalone SceneManager interface with categorized Connection and Friends
+  catalogs, favorites, recent items, repeat-last transfer, item artwork,
+  placement guidance, progress, cancellation, diagnostics, and vibration.
+- Passive original Connection V1/V2/V3 IR sniffer with decoded packets,
+  checksums, and raw timings.
+- Hardware-verified original V2 `Version 1` / V3 `Others` compatibility
+  fallback for standalone and Desktop-driven use.
 
-v0.3:
-Compatibility with flipper firmware 1.3.0-rc f7 ([cli API changes](https://github.com/flipperdevices/flipperzero-firmware/pull/4175))
-v0.2:
-Added images
-v0.1:
-Initial version
+### Changed
+
+- The Desktop CLI remains available and now shares the same protocol
+  implementation as standalone transfers.
+
+### Fixed
+
+- Corrected transfer-screen layout for the Flipper Zero's 128×64 display.
+- Added a low-level timing-safe legacy transmitter that avoids the normal raw
+  helper's leading delay and meets original Connection response timing.
+
+## [1.2.0] - 2026-08-22
+
+### Changed
+
+- Published the Desktop UI companion release while keeping the versioned CLI
+  compatible with Desktop 1.1.
+- Adopted the conventional `tamagometer_enhanced.fap` filename.
+
+## [1.1.0] - 2026-08-22
+
+### Added
+
+- Versioned `info` capability handshake and Friends transmission progress.
+
+### Changed
+
+- Clarified the enhanced fork's relationship to the original project.
+
+## [1.0.0] - 2026-08-22
+
+### Added
+
+- Tamagotchi Friends BFF BUMP support while retaining Connection 2024 IR
+  support.
+
+## [0.3]
+
+### Changed
+
+- Added compatibility with Flipper firmware 1.3.0-rc f7 after its
+  [CLI API changes](https://github.com/flipperdevices/flipperzero-firmware/pull/4175).
+
+## [0.2]
+
+### Added
+
+- Application images.
+
+## [0.1]
+
+- Initial version.

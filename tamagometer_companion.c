@@ -19,7 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define APP_VERSION "2.0.0"
+#define APP_VERSION "3.1.0"
 #define MENU_LABEL_LIMIT 65U
 #define MENU_LABEL_LENGTH 40U
 
@@ -337,18 +337,14 @@ static void fill_items_menu(TamagometerApp *app) {
 static void fill_item_detail(TamagometerApp *app) {
   widget_reset(app->widget);
   char details[64];
-  snprintf(details, sizeof(details), "%s\nID: %s%u\n%s",
-           app->selected_mode == TamaModeFriends ? "Friends - LF RFID"
-                                                 : "Connection - IR",
-           app->selected_mode == TamaModeFriends ? "0x" : "",
-           (unsigned int)app->selected_item,
-           tama_catalog_category_name(tama_catalog_item_category(
-               app->selected_mode, app->selected_item)));
+  const char *category = tama_catalog_category_name(
+      tama_catalog_item_category(app->selected_mode, app->selected_item));
   if (app->selected_mode == TamaModeFriends) {
     snprintf(details, sizeof(details), "Friends - LF RFID\nID: 0x%02X\n%s",
-             app->selected_item,
-             tama_catalog_category_name(tama_catalog_item_category(
-                 app->selected_mode, app->selected_item)));
+             app->selected_item, category);
+  } else {
+    snprintf(details, sizeof(details), "Connection - IR\nID: %u\n%s",
+             (unsigned int)app->selected_item, category);
   }
   widget_add_string_element(app->widget, 64, 3, AlignCenter, AlignTop,
                             FontPrimary, app->selected_name);
@@ -387,12 +383,12 @@ static void start_transfer(TamagometerApp *app) {
   furi_thread_start(app->transfer_thread);
 }
 
-static void finish_transfer_thread(TamagometerApp *app) {
-  if (app->transfer_thread) {
-    furi_thread_join(app->transfer_thread);
-    furi_thread_free(app->transfer_thread);
-    app->transfer_thread = NULL;
-  }
+static void finish_thread(FuriThread **thread) {
+  if (!*thread)
+    return;
+  furi_thread_join(*thread);
+  furi_thread_free(*thread);
+  *thread = NULL;
 }
 
 static void start_sniffer(TamagometerApp *app) {
@@ -405,14 +401,6 @@ static void start_sniffer(TamagometerApp *app) {
   app->sniffer_thread =
       furi_thread_alloc_ex("TamaSniffer", 4096, sniffer_worker, app);
   furi_thread_start(app->sniffer_thread);
-}
-
-static void finish_sniffer_thread(TamagometerApp *app) {
-  if (app->sniffer_thread) {
-    furi_thread_join(app->sniffer_thread);
-    furi_thread_free(app->sniffer_thread);
-    app->sniffer_thread = NULL;
-  }
 }
 
 static void update_sniffer_widget(TamagometerApp *app) {
@@ -594,7 +582,7 @@ static bool on_event_sniffer(void *context, SceneManagerEvent event) {
     return true;
   }
   if (event.event == TamaEventSnifferFinished) {
-    finish_sniffer_thread(app);
+    finish_thread(&app->sniffer_thread);
     update_sniffer_widget(app);
     if (app->settings.vibration)
       notification_message(app->notifications, &sequence_single_vibro);
@@ -684,6 +672,50 @@ static void on_enter_transfer(void *context) {
   start_transfer(app);
 }
 
+static void update_transfer_status(TamagometerApp *app) {
+  if (!app->legacy_fallback) {
+    strlcpy(app->last_status, tama_protocol_result_text(app->transfer_result),
+            sizeof(app->last_status));
+    return;
+  }
+
+  const char *peer = app->legacy_summary.peer == TamaLegacyPeerV2
+                         ? "V2"
+                         : app->legacy_summary.peer == TamaLegacyPeerV3
+                               ? "V3"
+                               : "unknown";
+  if (app->transfer_result == TamaTransferResultSuccess) {
+    snprintf(app->last_status, sizeof(app->last_status), "%s; peer: %s",
+             tama_protocol_legacy_activity_text(app->legacy_summary.activity),
+             peer);
+  } else {
+    snprintf(app->last_status, sizeof(app->last_status),
+             "%s; peer %s; ack %u; retry %u",
+             tama_protocol_result_text(app->transfer_result), peer,
+             (unsigned int)app->legacy_summary.identity_attempts,
+             (unsigned int)app->legacy_summary.initial_retries);
+  }
+}
+
+static void complete_transfer(TamagometerApp *app) {
+  // Join before reading the worker's result and legacy summary.
+  finish_thread(&app->transfer_thread);
+  update_transfer_status(app);
+  if (app->transfer_result == TamaTransferResultSuccess) {
+    if (!app->legacy_fallback) {
+      tama_settings_record_transfer(&app->settings, app->selected_mode,
+                                    app->selected_item);
+      tama_settings_save(&app->settings);
+    }
+    if (app->settings.vibration)
+      notification_message(app->notifications, &sequence_single_vibro);
+  } else if (app->transfer_result != TamaTransferResultCancelled &&
+             app->settings.vibration) {
+    notification_message(app->notifications, &sequence_double_vibro);
+  }
+  scene_manager_next_scene(app->scene_manager, TamaSceneResult);
+}
+
 static bool on_event_transfer(void *context, SceneManagerEvent event) {
   TamagometerApp *app = context;
   if (event.type == SceneManagerEventTypeTick) {
@@ -698,42 +730,7 @@ static bool on_event_transfer(void *context, SceneManagerEvent event) {
     return true;
   }
   if (event.event == TamaEventTransferFinished) {
-    finish_transfer_thread(app);
-    if (app->legacy_fallback) {
-      const char *peer = app->legacy_summary.peer == TamaLegacyPeerV2
-                             ? "V2"
-                             : app->legacy_summary.peer == TamaLegacyPeerV3
-                                   ? "V3"
-                                   : "unknown";
-      if (app->transfer_result == TamaTransferResultSuccess) {
-        snprintf(app->last_status, sizeof(app->last_status), "%s; peer: %s",
-                 tama_protocol_legacy_activity_text(
-                     app->legacy_summary.activity),
-                 peer);
-      } else {
-        snprintf(app->last_status, sizeof(app->last_status),
-                 "%s; peer %s; ack %u; retry %u",
-                 tama_protocol_result_text(app->transfer_result), peer,
-                 (unsigned int)app->legacy_summary.identity_attempts,
-                 (unsigned int)app->legacy_summary.initial_retries);
-      }
-    } else {
-      strlcpy(app->last_status, tama_protocol_result_text(app->transfer_result),
-              sizeof(app->last_status));
-    }
-    if (app->transfer_result == TamaTransferResultSuccess) {
-      if (!app->legacy_fallback) {
-        tama_settings_record_transfer(&app->settings, app->selected_mode,
-                                      app->selected_item);
-        tama_settings_save(&app->settings);
-      }
-      if (app->settings.vibration)
-        notification_message(app->notifications, &sequence_single_vibro);
-    } else if (app->transfer_result != TamaTransferResultCancelled &&
-               app->settings.vibration) {
-      notification_message(app->notifications, &sequence_double_vibro);
-    }
-    scene_manager_next_scene(app->scene_manager, TamaSceneResult);
+    complete_transfer(app);
     return true;
   }
   return false;
@@ -882,22 +879,43 @@ static void on_exit_popup(void *context) {
 }
 
 static const AppSceneOnEnterCallback on_enter_handlers[] = {
-    on_enter_welcome,     on_enter_main,        on_enter_sniffer,
-    on_enter_categories,  on_enter_items,       on_enter_item_detail,
-    on_enter_transfer,    on_enter_result,      on_enter_settings,
-    on_enter_about,       on_enter_popup,
+    [TamaSceneWelcome] = on_enter_welcome,
+    [TamaSceneMain] = on_enter_main,
+    [TamaSceneSniffer] = on_enter_sniffer,
+    [TamaSceneCategories] = on_enter_categories,
+    [TamaSceneItems] = on_enter_items,
+    [TamaSceneItemDetail] = on_enter_item_detail,
+    [TamaSceneTransfer] = on_enter_transfer,
+    [TamaSceneResult] = on_enter_result,
+    [TamaSceneSettings] = on_enter_settings,
+    [TamaSceneAbout] = on_enter_about,
+    [TamaScenePopup] = on_enter_popup,
 };
 static const AppSceneOnEventCallback on_event_handlers[] = {
-    on_event_welcome,     on_event_main,        on_event_sniffer,
-    on_event_categories,  on_event_items,       on_event_item_detail,
-    on_event_transfer,    on_event_result,      on_event_settings,
-    on_event_none,        on_event_popup,
+    [TamaSceneWelcome] = on_event_welcome,
+    [TamaSceneMain] = on_event_main,
+    [TamaSceneSniffer] = on_event_sniffer,
+    [TamaSceneCategories] = on_event_categories,
+    [TamaSceneItems] = on_event_items,
+    [TamaSceneItemDetail] = on_event_item_detail,
+    [TamaSceneTransfer] = on_event_transfer,
+    [TamaSceneResult] = on_event_result,
+    [TamaSceneSettings] = on_event_settings,
+    [TamaSceneAbout] = on_event_none,
+    [TamaScenePopup] = on_event_popup,
 };
 static const AppSceneOnExitCallback on_exit_handlers[] = {
-    on_exit_widget,   on_exit_menu,   on_exit_widget, on_exit_menu,
-    on_exit_menu,     on_exit_widget, on_exit_transfer,
-    on_exit_widget,   on_exit_menu,   on_exit_widget,
-    on_exit_popup,
+    [TamaSceneWelcome] = on_exit_widget,
+    [TamaSceneMain] = on_exit_menu,
+    [TamaSceneSniffer] = on_exit_widget,
+    [TamaSceneCategories] = on_exit_menu,
+    [TamaSceneItems] = on_exit_menu,
+    [TamaSceneItemDetail] = on_exit_widget,
+    [TamaSceneTransfer] = on_exit_transfer,
+    [TamaSceneResult] = on_exit_widget,
+    [TamaSceneSettings] = on_exit_menu,
+    [TamaSceneAbout] = on_exit_widget,
+    [TamaScenePopup] = on_exit_popup,
 };
 static const SceneManagerHandlers scene_handlers = {
     .on_enter_handlers = on_enter_handlers,
@@ -951,8 +969,8 @@ static TamagometerApp *app_alloc(void) {
 
 static void app_free(TamagometerApp *app) {
   app->cancel_requested = true;
-  finish_transfer_thread(app);
-  finish_sniffer_thread(app);
+  finish_thread(&app->transfer_thread);
+  finish_thread(&app->sniffer_thread);
   tamagometer_cli_unregister_and_free(app->cli);
   view_dispatcher_remove_view(app->view_dispatcher, TamaViewPopup);
   view_dispatcher_remove_view(app->view_dispatcher, TamaViewTransfer);

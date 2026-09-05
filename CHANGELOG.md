@@ -1,5 +1,22 @@
 # Changelog
 
+## [3.1.0] - 2026-09-05
+
+### Changed
+
+- Simplified standalone worker shutdown so transfer and sniffer threads share
+  one lifecycle path.
+- Split transfer completion rendering into focused status and result helpers.
+- Made SceneManager callback tables use explicit scene indices, reducing the
+  risk of a callback being paired with the wrong scene after future changes.
+- Simplified item-detail formatting while preserving the existing Connection,
+  Friends, and original V2/V3 behavior.
+
+### Verified
+
+- Built successfully against Flipper application API 87.1 for target 7.
+- Passed the shared Desktop catalog and protocol-constant consistency tests.
+
 ## [2.0.0] - 2026-08-29
 
 ### Added

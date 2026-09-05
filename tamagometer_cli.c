@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define COMPANION_VERSION "2.0.0"
+#define COMPANION_VERSION "3.1.0"
 
 struct TamagometerCli {
   FuriMutex *radio_mutex;

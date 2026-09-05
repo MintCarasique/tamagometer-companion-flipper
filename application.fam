@@ -6,7 +6,7 @@ App(
     sources=["*.c"],
     requires=["gui", "infrared"],
     fap_category="Tools",
-    fap_version="2.0.0",
+    fap_version="3.1.0",
     fap_author="MintCarasique",
     fap_icon="appicon.png",
     fap_description="Standalone and Desktop-compatible Tamagotchi gift utility",

@@ -4,9 +4,11 @@
 #include "tamagometer_cli.h"
 #include "tamagometer_item_icons.h"
 #include "tamagometer_protocol.h"
+#include "tamagometer_legacy.h"
 #include "tamagometer_settings.h"
 #include "tamagometer_sniffer.h"
 #include "tamagometer_transfer_view.h"
+#include "tamagometer_version.h"
 
 #include <furi.h>
 #include <gui/gui.h>
@@ -19,7 +21,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#define APP_VERSION "3.1.0"
 #define MENU_LABEL_LIMIT 65U
 #define MENU_LABEL_LENGTH 40U
 
@@ -533,7 +534,7 @@ static bool on_event_main(void *context, SceneManagerEvent event) {
     app->legacy_fallback = true;
     app->selected_mode = TamaModeConnection;
     memset(&app->legacy_summary, 0, sizeof(app->legacy_summary));
-    strlcpy(app->selected_name, "Original V1 fallback",
+    strlcpy(app->selected_name, "Original V2/V3/V4",
             sizeof(app->selected_name));
     scene_manager_next_scene(app->scene_manager, TamaSceneTransfer);
     return true;
@@ -679,11 +680,7 @@ static void update_transfer_status(TamagometerApp *app) {
     return;
   }
 
-  const char *peer = app->legacy_summary.peer == TamaLegacyPeerV2
-                         ? "V2"
-                         : app->legacy_summary.peer == TamaLegacyPeerV3
-                               ? "V3"
-                               : "unknown";
+  const char *peer = tama_legacy_peer_text(app->legacy_summary.peer);
   if (app->transfer_result == TamaTransferResultSuccess) {
     snprintf(app->last_status, sizeof(app->last_status), "%s; peer: %s",
              tama_protocol_legacy_activity_text(app->legacy_summary.activity),
@@ -807,7 +804,7 @@ static bool on_event_settings(void *context, SceneManagerEvent event) {
                "Legacy identity attempts: %u\n"
                "Legacy initial retries: %u\n"
                "Legacy last RX: %u bytes, type 0x%02X\n",
-               app->legacy_summary.peer == TamaLegacyPeerV2 ? "V2" : "V3",
+               tama_legacy_peer_text(app->legacy_summary.peer),
                (unsigned int)app->legacy_summary.initial_bytes,
                (unsigned int)app->legacy_summary.identity_attempts,
                (unsigned int)app->legacy_summary.initial_retries,
@@ -815,7 +812,7 @@ static bool on_event_settings(void *context, SceneManagerEvent event) {
                (unsigned int)app->legacy_summary.last_rx_type);
     }
     bool saved = tama_settings_export_diagnostics(
-        &app->settings, APP_VERSION, app->last_status, runtime_details);
+        &app->settings, TAMA_APP_VERSION, app->last_status, runtime_details);
     show_popup(app, saved ? "Report exported" : "Export failed",
                saved ? "Saved as diagnostics.txt in the app data folder"
                      : "Check that the SD card is available");
@@ -837,9 +834,9 @@ static void on_enter_about(void *context) {
   widget_reset(app->widget);
   widget_add_text_scroll_element(
       app->widget, 4, 2, 120, 60,
-      "\e#Tamagometer Enhanced 2.0\nStandalone + Desktop CLI.\n\nEnhanced fork "
+      "\e#Tamagometer Enhanced " TAMA_APP_VERSION "\nStandalone + Desktop CLI.\n\nEnhanced fork "
       "of the MIT-licensed Tamagometer project. Connection IR support derives "
-      "from Zach Resmer's original companion. Original V2/V3 fallback derives "
+      "from Zach Resmer's original companion. Original V2/V3/V4 fallback derives "
       "from hardware captures. Friends research by Natalie Silvanovich and "
       "MrBlinky.");
   view_dispatcher_switch_to_view(app->view_dispatcher, TamaViewWidget);

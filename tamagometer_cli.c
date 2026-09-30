@@ -1,13 +1,12 @@
 #include "tamagometer_cli.h"
 
 #include "tamagometer_protocol.h"
+#include "tamagometer_version.h"
 
 #include <api_lock.h>
 #include <cli/cli.h>
 #include <stdio.h>
 #include <string.h>
-
-#define COMPANION_VERSION "3.1.0"
 
 struct TamagometerCli {
   FuriMutex *radio_mutex;
@@ -45,9 +44,8 @@ static void cli_command(PipeSide *pipe, FuriString *args, void *context) {
 
   if (strcmp(value, "info") == 0) {
     static const unsigned char info_message[] =
-        "[TAMAGOMETER]version=" COMPANION_VERSION
-        ";protocol=1;capabilities=connection_ir,connection_legacy,"
-        "connection_sniffer,friends_lf,friends_progress,standalone_ui[END]";
+        "[TAMAGOMETER]version=" TAMA_APP_VERSION
+        ";protocol=" TAMA_PROTOCOL_VERSION ";capabilities=" TAMA_APP_CAPABILITIES "[END]";
     pipe_send(pipe, info_message, sizeof(info_message) - 1U);
   } else if (furi_mutex_acquire(cli_context->radio_mutex, FuriWaitForever) ==
              FuriStatusOk) {
@@ -72,6 +70,7 @@ static void cli_command(PipeSide *pipe, FuriString *args, void *context) {
       const char *peer = summary.peer == TamaLegacyPeerV2
                              ? "v2"
                              : summary.peer == TamaLegacyPeerV3 ? "v3"
+                             : summary.peer == TamaLegacyPeerV4 ? "v4"
                                                                 : "unknown";
       char message[96];
       snprintf(message, sizeof(message),

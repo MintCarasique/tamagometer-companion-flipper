@@ -31,42 +31,10 @@ typedef struct {
     uint8_t bytes[TAMA_SNIFFER_MAX_BYTES];
 } TamaDecodedLegacyFrame;
 
-static bool timing_between(uint32_t value, uint32_t minimum, uint32_t maximum) {
-    return value >= minimum && value <= maximum;
-}
-
 static TamaDecodedLegacyFrame decode_legacy_frame(const uint32_t* timings, size_t count) {
     TamaDecodedLegacyFrame decoded = {0};
-    if(count < 146U || !timing_between(timings[0], 7500U, 11500U) ||
-       !timing_between(timings[1], 1700U, 3300U)) {
-        return decoded;
-    }
-
-    uint16_t bit_count = 0;
-    if(count >= 322U) {
-        bit_count = 160U;
-    } else if(count >= 290U) {
-        bit_count = 144U;
-    } else if(count >= 146U) {
-        bit_count = 72U;
-    }
-    if(2U + bit_count * 2U > count) return decoded;
-
-    for(uint16_t bit = 0; bit < bit_count; bit++) {
-        const uint32_t mark = timings[2U + bit * 2U];
-        const uint32_t space = timings[3U + bit * 2U];
-        if(!timing_between(mark, 250U, 850U) || !timing_between(space, 450U, 1900U)) {
-            return decoded;
-        }
-        if(space >= 1050U) decoded.bytes[bit / 8U] |= (uint8_t)(1U << (bit % 8U));
-    }
-
-    decoded.byte_count = (uint8_t)(bit_count / 8U);
-    uint8_t checksum = 0;
-    for(uint8_t index = 0; index + 1U < decoded.byte_count; index++)
-        checksum = (uint8_t)(checksum + decoded.bytes[index]);
-    decoded.checksum_valid = checksum == decoded.bytes[decoded.byte_count - 1U];
-    decoded.recognized = true;
+    decoded.recognized = tama_legacy_decode(
+        timings, count, decoded.bytes, &decoded.byte_count, &decoded.checksum_valid);
     return decoded;
 }
 
@@ -124,7 +92,8 @@ static bool write_frame(
         (unsigned int)frame->timing_count,
         decoded->recognized ? (decoded->byte_count == 9U  ? "legacy-9" :
                                decoded->byte_count == 18U ? "legacy-18" :
-                                                            "legacy-20") :
+                               decoded->byte_count == 20U ? "legacy-20" :
+                                                            "legacy-24") :
                               "unknown");
     if(decoded->recognized) {
         written = written && write_format(

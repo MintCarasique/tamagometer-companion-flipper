@@ -1,4 +1,5 @@
 #include "tamagometer_settings.h"
+#include "tamagometer_version.h"
 
 #include <furi.h>
 #include <stdio.h>
@@ -173,9 +174,8 @@ bool tama_settings_export_diagnostics(const TamaSettings *settings,
       report, sizeof(report),
       "Tamagometer Enhanced diagnostic report\n"
       "App version: %s\n"
-      "Protocol: 1\n"
-      "Capabilities: standalone_ui,connection_ir,connection_legacy,"
-      "connection_sniffer,friends_lf,hybrid_cli\n"
+      "Protocol: " TAMA_PROTOCOL_VERSION "\n"
+      "Capabilities: " TAMA_APP_CAPABILITIES "\n"
       "Vibration: %s\n"
       "Onboarding complete: %s\n"
       "Recent transfers: %u\n"

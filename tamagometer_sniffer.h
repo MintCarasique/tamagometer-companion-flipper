@@ -1,11 +1,12 @@
 #pragma once
 
 #include "tamagometer_protocol.h"
+#include "tamagometer_legacy.h"
 
 #include <stdbool.h>
 #include <stdint.h>
 
-#define TAMA_SNIFFER_MAX_BYTES        20U
+#define TAMA_SNIFFER_MAX_BYTES        TAMA_LEGACY_MAX_BYTES
 #define TAMA_SNIFFER_FILE_NAME_LENGTH 40U
 
 typedef struct {

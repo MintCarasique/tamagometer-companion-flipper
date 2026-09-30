@@ -1,5 +1,34 @@
 # Changelog
 
+## [3.2.0] - 2026-09-30
+
+### Added
+
+- **Initial Support for V4** `Others` fallback using a captured V3 responder profile.
+- V4 peer labels in CLI results, on-device status, and diagnostic reports.
+- Host C regression tests using raw V4/V3 captures in both directions.
+
+### Fixed
+
+- Shared complete-frame decoding for 9, 18, 20, and 24 bytes; the sniffer now
+  reports V4 identities as `legacy-24` with correct checksum results.
+- Reject malformed lengths instead of silently truncating them to 20 bytes.
+
+### Compatibility
+
+- Preserves V2/V3 profiles. V4 gift receipt and the refactored V4/V3 build
+  were checked on physical hardware. V4 remains Initial Support: game winner
+  semantics and exhaustive compatibility are not established. Native V4 mode
+  and selectable V4 gifts are not implemented.
+
+### Changed
+
+- Isolated original Connection transport/exchange code from other protocols.
+- Reuse one IR worker per exchange and share acknowledgement/retry logic;
+  packet bytes and tested response delays are unchanged.
+- Centralized runtime version and capability metadata for CLI, About, and
+  diagnostics.
+
 ## [3.1.0] - 2026-09-05
 
 ### Changed

@@ -10,9 +10,13 @@ Windows application. It supports:
 - a versioned CLI capability handshake;
 - progress reporting for Friends transmissions.
 
-Current stable Companion version: **3.1.0**. Install it together with the
+Current stable Companion version: **3.2.0**. Install it together with the
 Desktop build from the same release. Companion-specific changes are recorded
 in [`CHANGELOG.md`](CHANGELOG.md).
+
+Version 3.2 adds **Initial Support for V4** `Others` fallback.
+See [`docs/CONNECTION_V4.md`](docs/CONNECTION_V4.md) for capture
+evidence, limitations, and hardware validation steps.
 
 ## Standalone interface
 
@@ -25,7 +29,7 @@ in [`CHANGELOG.md`](CHANGELOG.md).
   and cancellation with Back.
 - Settings include vibration feedback and one-file diagnostic export.
 - Item details use monochrome conversions of 171 original Tamagometer sprites.
-- Connection Sniffer passively records complete original V1/V2/V3 infrared
+- Connection Sniffer passively records complete original V1/V2/V3/V4 infrared
   sessions without transmitting. Captures contain timestamps, decoded legacy
   bytes, checksum results, and raw timings.
 - Original fallback answers a Connection V2 in `Version 1` mode or a
@@ -33,10 +37,10 @@ in [`CHANGELOG.md`](CHANGELOG.md).
   application. The random game/gift exchange is verified on both original
   devices, while fields without sufficient captures remain experimental.
 
-### Original V2/V3 fallback
+### Original V2/V3/V4 fallback
 
 1. Open **Original fallback** on the Flipper.
-2. On a V2 choose **Version 1**, or on a V3 choose **Others**, and start the
+2. On a V2 choose **Version 1**, or on a V3/V4 choose **Others**, and start the
    connection.
 3. Point the Tamagotchi IR window at the Flipper and keep both devices still.
 
@@ -46,6 +50,17 @@ for games; the Tamagotchi therefore loses. For gifts, the receiving Tamagotchi
 chooses the visible result from its own state. The Flipper uses fixed V2/V3 peer
 profiles derived from hardware captures, so testing can update the
 Tamagotchi's friend and relationship data.
+
+V4 Initial Support uses the V3 profile captured in an actual V4-to-V3
+exchange. It recognizes 24-byte identities and mirrors the session byte.
+Gift receipt and the refactored V4/V3 build were checked on physical hardware.
+Games use the captured result pattern, but winner semantics and exhaustive
+compatibility are not established. Start fallback on the Flipper first,
+then initiate `Others` on V4. Native V4 mode is not supported.
+
+Host capture tests: `python tools/test_legacy.py --cc gcc` (or pass a Clang or
+TinyCC executable). These replay ten captured signals through the production C
+decoder, reject a damaged frame, and check the reply bytes against capture 003.
 
 Legacy replies use the low-level infrared HAL because the normal Flipper raw
 remote helper adds 180 ms of leading silence. That delay misses the original
@@ -78,6 +93,17 @@ ufbt
 
 The generated application is written to `dist/tamagometer_enhanced.fap`.
 
+For a Windows development artifact, run from the enhanced parent repository:
+
+```powershell
+.\tools\build_flipper.ps1
+```
+
+This copies the installed result to `artifacts/tamagometer_enhanced_dev.fap`
+and verifies its runtime version and SHA256. An optional `-OutputPath` selects
+another destination. Do not copy an old `dist` file after building only the
+`fap_tamagometer_enhanced` target: that target does not install the new result.
+
 The item icons can be regenerated from a checkout of the enhanced parent
 repository with `tools/convert_item_sprites.py`.
 
@@ -87,7 +113,7 @@ repository with `tools/convert_item_sprites.py`.
   capabilities;
 - `tamagometer listen` receives a Connection IR frame;
 - `tamagometer send<bits>` transmits a 160-bit Connection IR frame;
-- `tamagometer legacy` runs one original V2/V3 compatibility exchange;
+- `tamagometer legacy` runs one original V2/V3/V4 compatibility exchange;
 - `tamagometer friends<0-255>` broadcasts a Friends BFF outcome.
 
 ## Fork relationship and attribution

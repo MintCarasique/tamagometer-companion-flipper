@@ -45,6 +45,7 @@ typedef enum {
   TamaLegacyPeerUnknown,
   TamaLegacyPeerV2,
   TamaLegacyPeerV3,
+  TamaLegacyPeerV4,
 } TamaLegacyPeer;
 
 typedef struct {

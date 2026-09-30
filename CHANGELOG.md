@@ -1,5 +1,20 @@
 # Changelog
 
+## [3.2.1] - 2026-09-30
+
+### Changed
+
+- Replaced generic transfer-screen boxes with small Tamagotchi and Flipper
+  silhouettes showing screens, buttons, IR windows, and rear LF placement.
+- Kept device artwork inside the existing guide area without changing progress,
+  title layout, or radio behavior.
+
+### Fixed
+
+- Transfer result text no longer overlaps when an original Connection
+  exchange is cancelled or fails. Display a short result and peer separately
+  from diagnostic counters, with scrolling for long names and status lines.
+
 ## [3.2.0] - 2026-09-30
 
 ### Added

@@ -1,4 +1,5 @@
 #include "tamagometer_transfer_view.h"
+#include "tamagometer_device_icons.h"
 
 #include <gui/elements.h>
 #include <stdio.h>
@@ -44,24 +45,25 @@ static const char *stage_text(TamaTransferStage stage) {
 }
 
 static void draw_connection_guide(Canvas *canvas, uint8_t frame) {
-  canvas_draw_rframe(canvas, 3, 20, 31, 19, 3);
-  canvas_draw_str(canvas, 8, 33, "FLIP");
-  canvas_draw_rframe(canvas, 94, 20, 31, 19, 8);
-  canvas_draw_circle(canvas, 109, 29, 5);
+  tama_draw_tamagotchi(canvas, 3, 21, false, true);
+  tama_draw_flipper(canvas, 84, 21, false);
   for (uint8_t beam = 0; beam < 3; beam++) {
-    int32_t x = 40 + beam * 16 + ((frame + beam) % 3);
-    canvas_draw_line(canvas, x, 26, x + 8, 26);
-    canvas_draw_line(canvas, x, 32, x + 8, 32);
+    int32_t x = 36 + beam * 15 + ((frame + beam) % 3);
+    canvas_draw_line(canvas, x, 28, x + 6, 28);
+    canvas_draw_line(canvas, x, 35, x + 6, 35);
   }
   canvas_draw_str_aligned(canvas, 64, 18, AlignCenter, AlignBottom,
                           "Align IR ports");
 }
 
 static void draw_friends_guide(Canvas *canvas, uint8_t frame) {
-  canvas_draw_rframe(canvas, 23, 21, 42, 20, 3);
-  canvas_draw_str(canvas, 31, 35, "FLIP");
-  canvas_draw_rframe(canvas, 62, 19, 42, 24, 8);
-  canvas_draw_circle(canvas, 83, 31, 6 + (frame % 2));
+  tama_draw_flipper(canvas, 36, 21, true);
+  /* The rear shell overlaps the antenna diagram, illustrating direct contact. */
+  canvas_set_color(canvas, ColorWhite);
+  canvas_draw_box(canvas, 64, 20, 22, 24);
+  canvas_set_color(canvas, ColorBlack);
+  tama_draw_tamagotchi(canvas, 64, 20, true, false);
+  canvas_draw_dot(canvas, 30 + (frame % 2), 31);
   canvas_draw_str_aligned(canvas, 64, 18, AlignCenter, AlignBottom,
                           "Back-to-back on LF");
 }

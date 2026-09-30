@@ -6,7 +6,7 @@ App(
     sources=["tamagometer_*.c"],
     requires=["gui", "infrared"],
     fap_category="Tools",
-    fap_version="3.2.0",
+    fap_version="3.2.1",
     fap_author="MintCarasique",
     fap_icon="appicon.png",
     fap_description="Standalone and Desktop-compatible Tamagotchi gift utility",

@@ -10,11 +10,13 @@ Windows application. It supports:
 - a versioned CLI capability handshake;
 - progress reporting for Friends transmissions.
 
-Current stable Companion version: **3.2.0**. Install it together with the
+Current stable Companion version: **3.2.1**. Install it together with the
 Desktop build from the same release. Companion-specific changes are recorded
 in [`CHANGELOG.md`](CHANGELOG.md).
 
 Version 3.2 adds **Initial Support for V4** `Others` fallback.
+Version 3.2.1 refreshes the device illustrations and prevents overlapping
+result text; radio behavior is unchanged.
 See [`docs/CONNECTION_V4.md`](docs/CONNECTION_V4.md) for capture
 evidence, limitations, and hardware validation steps.
 

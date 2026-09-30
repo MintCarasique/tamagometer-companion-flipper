@@ -748,9 +748,19 @@ static void on_enter_result(void *context) {
                             FontPrimary,
                             success ? "Transfer complete" : "Transfer stopped");
   char text[128];
-  snprintf(text, sizeof(text), "%s\n%s", app->selected_name, app->last_status);
-  widget_add_text_box_element(app->widget, 5, 20, 118, 28, AlignCenter,
-                              AlignTop, text, false);
+  const char *result = success && app->legacy_fallback
+                           ? tama_protocol_legacy_activity_text(app->legacy_summary.activity)
+                           : tama_protocol_result_text(app->transfer_result);
+  /* last_status includes diagnostic counters, not presentation text. Keep
+     those in the report and reserve a clipped, scrollable body above buttons. */
+  if (app->legacy_fallback) {
+    snprintf(text, sizeof(text), "\ec%s\n\ec%s\n\ecPeer: %s",
+             app->selected_name, result,
+             tama_legacy_peer_text(app->legacy_summary.peer));
+  } else {
+    snprintf(text, sizeof(text), "\ec%s\n\ec%s", app->selected_name, result);
+  }
+  widget_add_text_scroll_element(app->widget, 4, 18, 120, 31, text);
   widget_add_button_element(app->widget, GuiButtonTypeLeft, "Menu",
                             widget_callback, app);
   widget_add_button_element(app->widget, GuiButtonTypeCenter, "Repeat",
